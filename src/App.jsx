@@ -956,6 +956,7 @@ function FileRequestForm({ depts, userProfile, onSend, onClose }) {
 function AttendancePage({ attendance, users, depts, currentUser, userProfile }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [selectedDept, setSelectedDept] = useState("all");
+  const [selectedUser, setSelectedUser] = useState("all");
   const roleRestrictedDept = hasAdminRole(userProfile?.role) ? null : userProfile?.deptId;
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
@@ -964,13 +965,37 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
     gelmedi: "Gelmedi",
     izinli: "Izinli",
   };
-  const records = useMemo(() => {
+  const scopedRecords = useMemo(() => {
     return attendance
-      .filter(r => r.date === selectedDate)
       .filter(r => !roleRestrictedDept || r.deptId === roleRestrictedDept)
       .filter(r => selectedDept === "all" || r.deptId === selectedDept)
       .sort((a, b) => (a.meetingTitle || "").localeCompare(b.meetingTitle || "", "tr"));
-  }, [attendance, selectedDate, selectedDept, roleRestrictedDept]);
+  }, [attendance, selectedDept, roleRestrictedDept]);
+
+  const records = useMemo(() => {
+    return scopedRecords.filter(r => r.date === selectedDate);
+  }, [scopedRecords, selectedDate]);
+
+  const userOptions = useMemo(() => {
+    const ids = Array.from(new Set(scopedRecords.map(r => r.userId).filter(Boolean)));
+    return ids
+      .map(id => ({ id, name: getName(id) }))
+      .sort((a, b) => a.name.localeCompare(b.name, "tr"));
+  }, [scopedRecords]);
+
+  const personTotals = useMemo(() => {
+    if (selectedUser === "all") return { present: 0, absent: 0, excused: 0, total: 0, totalAbsence: 0 };
+    const list = scopedRecords.filter(r => r.userId === selectedUser);
+    const present = list.filter(r => r.status === "katildi").length;
+    const absent = list.filter(r => r.status === "gelmedi").length;
+    const excused = list.filter(r => r.status === "izinli").length;
+    return { present, absent, excused, total: list.length, totalAbsence: absent + excused };
+  }, [scopedRecords, selectedUser]);
+
+  const visibleRecords = useMemo(() => {
+    if (selectedUser === "all") return records;
+    return records.filter(r => r.userId === selectedUser);
+  }, [records, selectedUser]);
 
   const stats = records.reduce((acc, r) => {
     const status = r.status;
@@ -981,61 +1006,81 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
   }, { present: 0, absent: 0, excused: 0 });
 
   return (
-    <div>
-      <div style={{ ...S.grid4, marginBottom: 14 }}>
-        {[ ["Katildi", stats.present, "#2A7A62"], ["Gelmedi", stats.absent, ROMA_RED], ["Izinli", stats.excused, GOLD], ["Toplam Kayit", records.length, STOIC_NAVY] ].map(([label, num, color]) => (
-          <div key={label} style={S.stat(color)}>
-            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -1 }}>{num}</div>
-            <div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div>
+    <div style={{ background: "#F3F3F4", border: "1px solid #E6E6E8", borderRadius: 20, padding: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 }}>
+        <div style={{ ...S.card, borderRadius: 16, padding: "16px 18px" }}>
+          <div style={{ ...S.cardTitle, marginBottom: 10 }}>Kişi Toplam Devamsızlık</div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={S.label}>Kişi</label>
+            <select style={S.select} value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
+              <option value="all">Kişi seçin</option>
+              {userOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
           </div>
-        ))}
-      </div>
-
-      <div style={{ ...S.card, marginBottom: 14 }}>
-        <div style={{ ...S.flexBetween, gap: 10, flexWrap: "wrap" }}>
-          <div style={S.flex(8)}>
-            <div>
-              <label style={S.label}>Tarih</label>
-              <input type="date" style={{ ...S.input, width: 160 }} value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
-            </div>
-            <div>
-              <label style={S.label}>Departman</label>
-              <select style={{ ...S.select, width: 180 }} value={selectedDept} onChange={e => setSelectedDept(e.target.value)}>
-                <option value="all">Tum Departmanlar</option>
-                {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{ fontSize: 12.5, color: "#6B6B65", maxWidth: 350 }}>
-            Devamsizlik kayitlari otomatik olarak toplanti raporu kaydedildiginde uretilir.
+          <div style={{ border: "1px solid #ECECEF", borderRadius: 12, overflow: "hidden" }}>
+            {[ ["Toplam Devamsızlık", personTotals.totalAbsence], ["Gelmedi", personTotals.absent], ["Izinli", personTotals.excused], ["Katildi", personTotals.present], ["Toplam Kayit", personTotals.total] ].map(([label, value], i) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", borderBottom: i === 4 ? "none" : "1px solid #F1F1F3", fontSize: 12.5 }}>
+                <span style={{ color: "#64635F" }}>{label}</span>
+                <strong style={{ color: "#171717" }}>{value}</strong>
+              </div>
+            ))}
           </div>
         </div>
-      </div>
 
-      <div style={S.card}>
-        <table style={S.table}>
-          <thead>
-            <tr>{["Toplanti", "Kisi", "Departman", "Durum", "Kaynak"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {records.length === 0 ? (
-              <tr><td colSpan={5} style={{ ...S.td, textAlign: "center", color: "#8A8A8E" }}>Kayit bulunamadi</td></tr>
-            ) : records.map(r => {
-              const status = r.status;
-              return (
-                <tr key={r.id}>
-                  <td style={S.td}><strong>{r.meetingTitle || "Toplanti"}</strong></td>
-                  <td style={S.td}>{getName(r.userId)}</td>
-                  <td style={S.td}>{r.deptId ? getDept(r.deptId) : "—"}</td>
-                  <td style={S.td}>
-                    <span style={S.badge(status === "katildi" ? "#2A7A62" : status === "gelmedi" ? ROMA_RED : status === "izinli" ? GOLD : "#8A8A8E")}>{statusLabel[status] || "—"}</span>
-                  </td>
-                  <td style={S.td}><span style={S.tag}>{r.source === "meeting-report" ? "Toplanti" : "Manuel"}</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ ...S.card, borderRadius: 16, padding: "14px 16px" }}>
+            <div style={{ ...S.flexBetween, gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <label style={S.label}>Tarih</label>
+                  <input type="date" style={{ ...S.input, width: 170 }} value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                </div>
+                <div>
+                  <label style={S.label}>Departman</label>
+                  <select style={{ ...S.select, width: 190 }} value={selectedDept} onChange={e => setSelectedDept(e.target.value)}>
+                    <option value="all">Tum Departmanlar</option>
+                    {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(94px,1fr))", gap: 8, width: "100%", maxWidth: 460 }}>
+                {[ ["Katildi", stats.present, "#2A7A62"], ["Gelmedi", stats.absent, ROMA_RED], ["Izinli", stats.excused, GOLD], ["Kayit", records.length, STOIC_NAVY] ].map(([label, num, color]) => (
+                  <div key={label} style={{ border: "1px solid #ECECEF", borderRadius: 12, padding: "9px 10px", background: "#FFFFFF" }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color }}>{num}</div>
+                    <div style={{ fontSize: 11, color: "#6B6B65" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...S.card, borderRadius: 16, padding: "8px 0 0" }}>
+            <table style={S.table}>
+              <thead>
+                <tr>{["Toplanti", "Kisi", "Departman", "Durum", "Mazeret", "Kaynak"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {visibleRecords.length === 0 ? (
+                  <tr><td colSpan={6} style={{ ...S.td, textAlign: "center", color: "#8A8A8E" }}>Kayit bulunamadi</td></tr>
+                ) : visibleRecords.map(r => {
+                  const status = r.status;
+                  return (
+                    <tr key={r.id}>
+                      <td style={S.td}><strong>{r.meetingTitle || "Toplanti"}</strong></td>
+                      <td style={S.td}>{getName(r.userId)}</td>
+                      <td style={S.td}>{r.deptId ? getDept(r.deptId) : "—"}</td>
+                      <td style={S.td}>
+                        <span style={S.badge(status === "katildi" ? "#2A7A62" : status === "gelmedi" ? ROMA_RED : status === "izinli" ? GOLD : "#8A8A8E")}>{statusLabel[status] || "—"}</span>
+                      </td>
+                      <td style={{ ...S.td, maxWidth: 220, color: "#66645F" }}>{r.excuse || "—"}</td>
+                      <td style={S.td}><span style={S.tag}>{r.source === "meeting-report" ? "Toplanti" : "Manuel"}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );
