@@ -333,7 +333,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
             <option value="gecikmeli">Gecikmeli</option>
           </select>
         </div>
-        {roleLevel(userProfile?.role) > 0 && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
+        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -476,7 +476,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 14 }}>
         <div />
-        {roleLevel(userProfile?.role) > 0 && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
+        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
