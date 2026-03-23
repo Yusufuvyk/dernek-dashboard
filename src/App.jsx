@@ -210,17 +210,19 @@ function LoginPage({ onLogin }) {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, currentUser, userProfile }) {
-  const mine = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
+  const mine = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => {
+    const arr = Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo];
+    return t.deptId === userProfile?.deptId || arr.includes(currentUser?.uid);
+  });
   const myMsgs = messages.filter(m => m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId);
   const pendingMsgs = myMsgs.filter(m => m.status === "bekliyor").length;
-  const pendingFiles = fileRequests.filter(f => f.toDeptId === userProfile?.deptId && f.status === "bekliyor").length;
   const getName = id => users.find(u => u.id === id)?.name || "—";
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
   return (
     <div>
-      <div style={S.grid4}>
-        {[["Toplam Görev", mine.length, STOIC_NAVY], ["Tamamlandı", mine.filter(t => t.status === "tamamlandı").length, "#30D158"], ["Bekleyen Mesaj", pendingMsgs, GOLD], ["Dosya Talebi", pendingFiles, ROMA_RED]].map(([label, num, color]) => (
+      <div style={S.grid3}>
+        {[["Toplam Görev", mine.length, STOIC_NAVY], ["Tamamlandı", mine.filter(t => t.status === "tamamlandı").length, "#30D158"], ["Bekleyen Mesaj", pendingMsgs, GOLD]].map(([label, num, color]) => (
           <div key={label} style={S.stat(color)}>
             <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -1 }}>{num}</div>
             <div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div>
@@ -266,13 +268,12 @@ function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, curr
       <div style={S.card}>
         <div style={S.cardTitle}>Son Görevler</div>
         <table style={S.table}>
-          <thead><tr>{["Görev", "Departman", "Durum", "İlerleme"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Görev", "Departman", "Durum"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>{mine.slice(0, 5).map(t => (
             <tr key={t.id}>
               <td style={S.td}><strong>{t.title}</strong></td>
               <td style={S.td}><span style={S.tag}>{getDept(t.deptId)}</span></td>
               <td style={S.td}><span style={S.badge(STATUS[t.status]?.color || "#999")}>{STATUS[t.status]?.label}</span></td>
-              <td style={{ ...S.td, minWidth: 100 }}><div style={S.pb}><div style={S.pbF(t.progress)} /></div><div style={{ fontSize: 10.5, color: "#8A8A8E", marginTop: 2 }}>{t.progress}%</div></td>
             </tr>
           ))}</tbody>
         </table>
@@ -289,7 +290,10 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
 
   const visible = useMemo(() => {
-    let list = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
+    let list = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => {
+      const arr = Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo];
+      return t.deptId === userProfile?.deptId || arr.includes(currentUser?.uid);
+    });
     if (fDept !== "all") list = list.filter(t => t.deptId === fDept);
     if (fStatus !== "all") list = list.filter(t => t.status === fStatus);
     if (search) list = list.filter(t => t.title.toLowerCase().includes(search.toLowerCase()));
@@ -307,7 +311,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   const del = async id => { await deleteDoc(doc(db, "tasks", id)); };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
-  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: currentUser?.uid || "", startDate: today(), endDate: "", progress: 0, notes: "", status: "devam" };
+  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: today(), endDate: "", notes: "", status: "devam" };
 
   return (
     <div>
@@ -329,17 +333,16 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
       </div>
       <div style={S.card}>
         <table style={S.table}>
-          <thead><tr>{["Başlık", "Departman", "Atanan", "Bitiş", "Durum", "İlerleme", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Başlık", "Departman", "Atananlar", "Bitiş", "Durum", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>
-            {visible.length === 0 ? <tr><td colSpan={7} style={{ ...S.td, textAlign: "center", color: "#8A8A8E" }}>Görev bulunamadı</td></tr>
+            {visible.length === 0 ? <tr><td colSpan={6} style={{ ...S.td, textAlign: "center", color: "#8A8A8E" }}>Görev bulunamadı</td></tr>
               : visible.map(t => (
                 <tr key={t.id}>
                   <td style={S.td}><div style={{ fontWeight: 600 }}>{t.title}</div>{t.desc && <div style={{ fontSize: 11.5, color: "#8A8A8E" }}>{t.desc}</div>}</td>
                   <td style={S.td}><span style={S.tag}>{getDept(t.deptId)}</span></td>
-                  <td style={S.td}>{getName(t.assignedTo)}</td>
+                  <td style={S.td}><div style={{ ...S.flex(4), flexWrap: "wrap", maxWidth: 200 }}>{(Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo]).filter(Boolean).map(id => <span key={id} style={S.tag}>{getName(id)}</span>)}</div></td>
                   <td style={S.td}>{fmtDate(t.endDate)}</td>
                   <td style={S.td}><span style={S.badge(STATUS[t.status]?.color || "#999")}>{STATUS[t.status]?.label}</span></td>
-                  <td style={{ ...S.td, minWidth: 100 }}><div style={S.pb}><div style={S.pbF(t.progress)} /></div><div style={{ fontSize: 10.5, color: "#8A8A8E", marginTop: 2 }}>{t.progress}%</div></td>
                   <td style={S.td}><div style={S.flex(5)}>
                     <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>
                     {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(t.id)}><Icon name="trash" size={13} /></button>}
@@ -357,23 +360,44 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
 function TaskModal({ mode, task, depts, users, onSave, onClose }) {
   const [f, setF] = useState(task);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  
+  const toggleUser = (id) => {
+    const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
+    const updated = arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id];
+    set("assignedTo", updated);
+  };
+
   return (
     <Modal title={mode === "add" ? "Yeni Görev" : "Görevi Düzenle"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div><label style={S.label}>Açıklama</label><textarea style={S.textarea} value={f.desc} onChange={e => set("desc", e.target.value)} /></div>
+        
         <div style={S.formRow}>
           <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)}>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-          <div><label style={S.label}>Atanan</label><select style={S.select} value={f.assignedTo} onChange={e => set("assignedTo", e.target.value)}>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+          <div><label style={S.label}>Durum</label><select style={S.select} value={f.status} onChange={e => set("status", e.target.value)}><option value="devam">Devam Ediyor</option><option value="tamamlandı">Tamamlandı</option><option value="gecikmeli">Gecikmeli</option></select></div>
         </div>
+
+        <div>
+          <label style={S.label}>Atananlar</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
+            {users.map(u => {
+              const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
+              const isSelected = arr.includes(u.id);
+              return (
+                <div key={u.id} onClick={() => toggleUser(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E" }}>
+                  {u.name}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div style={S.formRow}>
           <div><label style={S.label}>Başlangıç</label><input type="date" style={S.input} value={f.startDate} onChange={e => set("startDate", e.target.value)} /></div>
           <div><label style={S.label}>Bitiş</label><input type="date" style={S.input} value={f.endDate} onChange={e => set("endDate", e.target.value)} /></div>
         </div>
-        <div style={S.formRow}>
-          <div><label style={S.label}>Durum</label><select style={S.select} value={f.status} onChange={e => set("status", e.target.value)}><option value="devam">Devam Ediyor</option><option value="tamamlandı">Tamamlandı</option><option value="gecikmeli">Gecikmeli</option></select></div>
-          <div><label style={S.label}>İlerleme: {f.progress}%</label><input type="range" min={0} max={100} value={f.progress} onChange={e => set("progress", +e.target.value)} style={{ width: "100%", marginTop: 8 }} /></div>
-        </div>
+        
         <div><label style={S.label}>Notlar</label><textarea style={S.textarea} value={f.notes} onChange={e => set("notes", e.target.value)} /></div>
         <div style={{ ...S.flex(10), justifyContent: "flex-end" }}>
           <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
@@ -388,6 +412,7 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
 function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
   const [reportModal, setReportModal] = useState(null);
+  const [excuseModal, setExcuseModal] = useState(null);
   const visible = hasAdminRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
   const emptyM = { title: "", deptId: depts[0]?.id || "", datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
 
@@ -395,6 +420,14 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     if (modal.mode === "add") await addDoc(collection(db, "meetings"), { ...m, createdAt: serverTimestamp() });
     else await updateDoc(doc(db, "meetings", m.id), m);
     setModal(null);
+  };
+  const saveExcuse = async (meetingId, reason) => {
+    const meeting = meetings.find(m => m.id === meetingId);
+    if (!meeting) return;
+    const excuses = meeting.excuses || {};
+    excuses[currentUser.uid] = reason;
+    await updateDoc(doc(db, "meetings", meetingId), { excuses });
+    setExcuseModal(null);
   };
   const del = async id => await deleteDoc(doc(db, "meetings", id));
   const saveReport = async ({ meetingId, report, attendedParticipantIds }) => {
@@ -410,17 +443,24 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
       status: "yapıldı",
     });
 
-    const attendanceWrites = invitedParticipantIds.map(userId => setDoc(doc(db, "attendance", `${meetingId}_${userId}`), {
-      meetingId,
-      meetingTitle: meeting.title,
-      userId,
-      date,
-      deptId: meeting.deptId || null,
-      status: attendedSet.has(userId) ? "katildi" : "gelmedi",
-      source: "meeting-report",
-      updatedBy: currentUser?.uid || null,
-      updatedAt: serverTimestamp(),
-    }, { merge: true }));
+    const attendanceWrites = invitedParticipantIds.map(userId => {
+      let status = "gelmedi";
+      if (attendedSet.has(userId)) status = "katildi";
+      else if (meeting.excuses && meeting.excuses[userId]) status = "izinli";
+
+      return setDoc(doc(db, "attendance", `${meetingId}_${userId}`), {
+        meetingId,
+        meetingTitle: meeting.title,
+        userId,
+        date,
+        deptId: meeting.deptId || null,
+        status,
+        excuse: meeting.excuses && meeting.excuses[userId] ? meeting.excuses[userId] : null,
+        source: "meeting-report",
+        updatedBy: currentUser?.uid || null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    });
 
     await Promise.all(attendanceWrites);
     setReportModal(null);
@@ -448,6 +488,8 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
                   <td style={S.td}><span style={S.badge(STATUS[m.status]?.color || "#999")}>{STATUS[m.status]?.label}</span></td>
                   <td style={S.td}><div style={S.flex(5)}>
                     {m.status === "planlandı" && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", meeting: { ...m } })}><Icon name="edit" size={13} /></button>}
+                    {m.status === "planlandı" && m.participants?.includes(currentUser?.uid) && !m.excuses?.[currentUser?.uid] && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: GOLD }} onClick={() => setExcuseModal(m)}>İzin Al</button>}
+                    {m.status === "planlandı" && m.participants?.includes(currentUser?.uid) && m.excuses?.[currentUser?.uid] && <span style={{ fontSize: 11, color: GOLD, fontWeight: 600 }}>İzinli</span>}
                     <button style={{ ...S.btn("green"), padding: "4px 11px", fontSize: 12 }} onClick={() => setReportModal(m)}><Icon name="reports" size={12} /> Rapor</button>
                     {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(m.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
@@ -458,7 +500,24 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
       </div>
       {modal && <MeetingModal {...modal} depts={depts} users={users} onSave={save} onClose={() => setModal(null)} />}
       {reportModal && <ReportModal meeting={reportModal} users={users} depts={depts} onSave={saveReport} onClose={() => setReportModal(null)} />}
+      {excuseModal && <ExcuseModal meeting={excuseModal} onSave={saveExcuse} onClose={() => setExcuseModal(null)} />}
     </div>
+  );
+}
+
+function ExcuseModal({ meeting, onSave, onClose }) {
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="İzin Al" onClose={onClose}>
+      <div style={{ marginBottom: 11, fontSize: 13, color: "#4F4D49" }}>
+        <strong>{meeting.title}</strong> toplantısına katılamayacağınız için mazeretinizi belirtin:
+      </div>
+      <textarea style={S.textarea} value={reason} onChange={e => setReason(e.target.value)} placeholder="Mazeretiniz..." />
+      <div style={{ ...S.flex(10), justifyContent: "flex-end", marginTop: 14 }}>
+        <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
+        <button style={S.btn()} onClick={() => onSave(meeting.id, reason)} disabled={!reason.trim()}>Kaydet</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -513,26 +572,30 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
       </div>
       <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><textarea style={{ ...S.textarea, minHeight: 80 }} value={kararlar} onChange={e => setKararlar(e.target.value)} /></div>
       <div style={{ marginBottom: 12 }}>
-        <label style={S.label}>Katilanlar (otomatik devamsizlik icin isaretleyin)</label>
+        <label style={S.label}>Katılanlar (otomatik devamsızlık için işaretleyin)</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
           {(meeting.participants || []).map(id => {
             const active = attendedParticipantIds.includes(id);
+            const excuse = meeting.excuses?.[id];
             return (
-              <div
-                key={id}
-                onClick={() => toggleAttended(id)}
-                style={{
-                  padding: "4px 11px",
-                  borderRadius: 20,
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  background: active ? "#1C1C1E" : "#FFFFFF",
-                  color: active ? "#fff" : "#1C1C1E",
-                  border: active ? `1px solid ${GOLD}` : "1px solid #DADADA",
-                }}
-              >
-                {getName(id)}
+              <div key={id} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <div
+                  onClick={() => toggleAttended(id)}
+                  style={{
+                    padding: "4px 11px",
+                    borderRadius: 20,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    background: active ? "#1C1C1E" : "#FFFFFF",
+                    color: active ? "#fff" : "#1C1C1E",
+                    border: active ? `1px solid ${GOLD}` : "1px solid #DADADA",
+                    textAlign: "center"
+                  }}
+                >
+                  {getName(id)}
+                </div>
+                {excuse && !active && <div style={{ fontSize: 10, color: GOLD, maxWidth: 80, lineHeight: 1.1, textAlign: "center" }} title={excuse}>İzinli</div>}
               </div>
             );
           })}
@@ -1256,7 +1319,6 @@ export default function App() {
   }, [currentUser]);
 
   const pendingMsgs = messages.filter(m => (m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId) && m.status === "bekliyor").length;
-  const pendingFiles = fileRequests.filter(f => f.toDeptId === userProfile?.deptId && f.status === "bekliyor").length;
 
   if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yukleniyor...</div>;
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
@@ -1265,10 +1327,10 @@ export default function App() {
   const NAV_GROUPS = [
     { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] },
     { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
-    { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }, { id: "filerequests", label: "Dosya Talepleri", icon: "file", badge: pendingFiles }] },
+    { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }] },
     { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
   ];
-  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", filerequests: "Dosya Talepleri", reports: "Raporlar" };
+  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar" };
   const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile };
 
   const renderPage = () => {
@@ -1281,7 +1343,6 @@ export default function App() {
       case "departments": return <DepartmentsPage {...props} />;
       case "userlist": return <UsersPage {...props} />;
       case "messages": return <MessagesPage {...props} />;
-      case "filerequests": return <FileRequestsPage {...props} />;
       case "reports": return <ReportsPage {...props} />;
       default: return null;
     }
