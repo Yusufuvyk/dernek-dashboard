@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { db, auth } from "./firebase";
 import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
-  onSnapshot, query, orderBy, serverTimestamp
+  onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword,
@@ -14,6 +14,7 @@ import {
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
+const dayFromDateTime = dt => (dt ? String(dt).slice(0, 10) : today());
 const fmtDate = d => d ? new Date(d).toLocaleDateString("tr-TR") : "—";
 const fmtDateTime = d => d ? new Date(d).toLocaleString("tr-TR") : "—";
 const timeAgo = d => {
@@ -23,6 +24,38 @@ const timeAgo = d => {
   if (diff < 60) return `${diff}dk önce`;
   if (diff < 1440) return `${Math.floor(diff / 60)}sa önce`;
   return fmtDate(d);
+};
+
+const normalizeRole = (role) => {
+  const r = String(role || "").trim().toLowerCase();
+  if (["admin", "başkan", "yonetici", "yönetici"].includes(r)) return "Başkan";
+  return role;
+};
+
+// ─ Role helpers (backward-compat: old "Admin"→"Başkan", old "Departman Üyesi"→manager, "Genel Üye"→member)
+const hasAdminRole = r => ["Admin", "Başkan"].includes(r);
+const roleLevel = r => {
+  if (["Admin", "Başkan"].includes(r)) return 0;
+  if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return 1; // old "Departman Üyesi" = manager level
+  return 2; // "Üye", "Genel Üye" = regular member
+};
+const displayRole = r => {
+  if (hasAdminRole(r)) return "Başkan";
+  if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return "Departman Yöneticisi";
+  return "Departman Üyesi";
+};
+
+const openPrintableReport = ({ title, bodyHtml }) => {
+  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;white-space:pre-wrap;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  if (!popup) {
+    URL.revokeObjectURL(url);
+    alert("Rapor penceresi acilamadi. Lutfen popup engelleyiciyi kapatin.");
+    return;
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -51,69 +84,74 @@ function Icon({ name, size = 18 }) {
 }
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
-const AVATAR_COLORS = ["#0A84FF", "#30D158", "#FF9F0A", "#FF3B30", "#BF5AF2", "#FF6B35"];
+const AVATAR_COLORS = ["#1F2937", "#374151", "#4B5563", "#6B7280", "#0F766E", "#8A6A16"];
 const avatarColor = id => AVATAR_COLORS[(id?.charCodeAt(id.length - 1) || 0) % AVATAR_COLORS.length];
+const ROMA_RED = "#8B0000";
+const STOIC_NAVY = "#1B1D22";
+const MARBLE = "#FFFFFF";
+const GOLD = "#B98B2C";
+const FONT_SERIF = "'Cinzel','Cormorant Garamond','Times New Roman',serif";
 
 const S = {
-  app: { display: "flex", height: "100vh", fontFamily: "'DM Sans','Segoe UI',sans-serif", background: "#F5F4F0", color: "#1C1C1E", overflow: "hidden" },
-  sidebar: { width: 232, background: "#1C1C1E", display: "flex", flexDirection: "column", padding: "0 0 16px", flexShrink: 0 },
-  nav: { flex: 1, padding: "10px 8px", display: "flex", flexDirection: "column", gap: 1 },
-  navItem: a => ({ display: "flex", alignItems: "center", gap: 9, padding: "8px 12px", borderRadius: 8, cursor: "pointer", color: a ? "#fff" : "#8A8A8E", background: a ? "#2C2C2E" : "transparent", fontSize: 13, fontWeight: a ? 600 : 400, userSelect: "none" }),
-  navSection: { fontSize: 10, fontWeight: 700, color: "#3A3A3C", textTransform: "uppercase", letterSpacing: 1, padding: "12px 12px 4px" },
+  app: { display: "flex", height: "100vh", fontFamily: "'Manrope','DM Sans','Segoe UI',sans-serif", background: "#FFFFFF", color: "#161513", overflow: "hidden" },
+  sidebar: { width: 260, background: "#0F0F10", borderRight: "1px solid #232326", display: "flex", flexDirection: "column", padding: "0 0 16px", flexShrink: 0 },
+  nav: { flex: 1, padding: "10px 10px", display: "flex", flexDirection: "column", gap: 2 },
+  navItem: a => ({ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 10, cursor: "pointer", color: a ? "#F7F7F5" : "#97958F", background: a ? "rgba(139,0,0,.22)" : "transparent", border: a ? `1px solid ${ROMA_RED}88` : "1px solid transparent", boxShadow: a ? `inset 2px 0 0 ${ROMA_RED}` : "none", fontSize: 13, fontWeight: a ? 700 : 500, userSelect: "none" }),
+  navSection: { fontSize: 10, fontWeight: 700, color: "#6F6D69", textTransform: "uppercase", letterSpacing: 1, padding: "13px 12px 5px" },
   main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
-  topbar: { background: "#fff", borderBottom: "1px solid #E5E5EA", padding: "0 24px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
-  content: { flex: 1, overflow: "auto", padding: "24px" },
-  card: { background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E5E5EA" },
-  cardTitle: { fontSize: 11, fontWeight: 700, color: "#8A8A8E", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.8 },
-  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 },
-  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 },
-  grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 },
-  stat: c => ({ background: c, borderRadius: 12, padding: "18px 22px", color: "#fff" }),
+  topbar: { background: "#FFFFFF", borderBottom: "1px solid #E5E5E5", padding: "0 24px", height: 62, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
+  content: { flex: 1, overflow: "auto", padding: "20px" },
+  card: { background: "#FFFFFF", borderRadius: 14, padding: "18px 20px", border: "1px solid #E5E5E5", boxShadow: "0 3px 10px rgba(0,0,0,.03)" },
+  cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85, fontFamily: FONT_SERIF },
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
+  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 },
+  grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 },
+  stat: c => ({ background: "#FFFFFF", borderRadius: 14, padding: "16px 18px", color: "#191918", border: "1px solid #E5E5E5", boxShadow: "0 1px 0 rgba(0,0,0,.02)", borderTop: `3px solid ${c}` }),
   btn: (v = "primary") => {
-    const b = { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", whiteSpace: "nowrap", fontFamily: "inherit" };
-    return v === "primary" ? { ...b, background: "#1C1C1E", color: "#fff" }
-      : v === "ghost" ? { ...b, background: "transparent", color: "#1C1C1E", border: "1px solid #E5E5EA" }
-        : v === "green" ? { ...b, background: "#30D158", color: "#fff" }
-          : v === "blue" ? { ...b, background: "#0A84FF", color: "#fff" }
-            : v === "danger" ? { ...b, background: "#FF3B30", color: "#fff" }
+    const b = { display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 10, fontSize: 13, fontWeight: 650, cursor: "pointer", border: "none", whiteSpace: "nowrap", fontFamily: "inherit" };
+    return v === "primary" ? { ...b, background: ROMA_RED, color: "#fff", border: "1px solid #580000" }
+      : v === "ghost" ? { ...b, background: "#fff", color: STOIC_NAVY, border: "1px solid #d2d0cb" }
+        : v === "green" ? { ...b, background: "#1F8F5F", color: "#fff" }
+        : v === "blue" ? { ...b, background: STOIC_NAVY, color: "#fff", border: "1px solid #0f1013" }
+            : v === "danger" ? { ...b, background: "#2B2B2B", color: "#fff" }
               : b;
   },
-  label: { fontSize: 12, fontWeight: 600, color: "#636366", display: "block", marginBottom: 4 },
-  input: { width: "100%", padding: "8px 11px", borderRadius: 8, border: "1px solid #E5E5EA", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#FAFAFA", fontFamily: "inherit" },
-  select: { width: "100%", padding: "8px 11px", borderRadius: 8, border: "1px solid #E5E5EA", fontSize: 13, outline: "none", background: "#FAFAFA", fontFamily: "inherit" },
-  textarea: { width: "100%", padding: "8px 11px", borderRadius: 8, border: "1px solid #E5E5EA", fontSize: 13, outline: "none", resize: "vertical", boxSizing: "border-box", background: "#FAFAFA", minHeight: 72, fontFamily: "inherit" },
+  label: { fontSize: 12, fontWeight: 650, color: "#4F4D49", display: "block", marginBottom: 5 },
+  input: { width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DADADA", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#FFFFFF", fontFamily: "inherit" },
+  select: { width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DADADA", fontSize: 13, outline: "none", background: "#FFFFFF", fontFamily: "inherit" },
+  textarea: { width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DADADA", fontSize: 13, outline: "none", resize: "vertical", boxSizing: "border-box", background: "#FFFFFF", minHeight: 72, fontFamily: "inherit" },
   formRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   table: { width: "100%", borderCollapse: "collapse" },
-  th: { textAlign: "left", padding: "9px 13px", fontSize: 11, fontWeight: 700, color: "#8A8A8E", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #E5E5EA" },
-  td: { padding: "11px 13px", fontSize: 13, borderBottom: "1px solid #F2F2F7", verticalAlign: "middle" },
+  th: { textAlign: "left", padding: "9px 13px", fontSize: 11, fontWeight: 700, color: "#696762", textTransform: "uppercase", letterSpacing: 0.6, borderBottom: "1px solid #dfddd9" },
+  td: { padding: "12px 13px", fontSize: 13, borderBottom: "1px solid #eceae6", verticalAlign: "middle" },
   badge: c => ({ display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: c + "22", color: c }),
-  pb: { height: 5, background: "#E5E5EA", borderRadius: 4, overflow: "hidden" },
-  pbF: p => ({ height: "100%", width: `${p}%`, background: p === 100 ? "#30D158" : p < 30 ? "#FF3B30" : "#FF9F0A", borderRadius: 4 }),
+  pb: { height: 5, background: "#EAEAEA", borderRadius: 4, overflow: "hidden" },
+  pbF: p => ({ height: "100%", width: `${p}%`, background: p === 100 ? "#1F8F5F" : p < 30 ? ROMA_RED : GOLD, borderRadius: 4 }),
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" },
   modal: { background: "#fff", borderRadius: 16, padding: 26, width: "100%", maxWidth: 540, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.22)" },
   flex: (g = 0) => ({ display: "flex", alignItems: "center", gap: g }),
   flexBetween: { display: "flex", alignItems: "center", justifyContent: "space-between" },
-  tag: { display: "inline-block", padding: "2px 7px", borderRadius: 5, fontSize: 11, background: "#F2F2F7", color: "#636366" },
-  empty: { textAlign: "center", padding: "40px 0", color: "#8A8A8E", fontSize: 13 },
-  avatar: (color = "#0A84FF") => ({ width: 32, height: 32, borderRadius: "50%", background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }),
+  tag: { display: "inline-block", padding: "3px 8px", borderRadius: 6, fontSize: 11, background: "#FFFFFF", color: "#53504b", border: "1px solid #DADADA" },
+  empty: { textAlign: "center", padding: "40px 0", color: "#7b7975", fontSize: 13 },
+  avatar: (color = STOIC_NAVY) => ({ width: 32, height: 32, borderRadius: "50%", background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }),
 };
 
 const STATUS = {
   "tamamlandı": { color: "#30D158", label: "Tamamlandı" },
-  "devam": { color: "#FF9F0A", label: "Devam Ediyor" },
-  "gecikmeli": { color: "#FF3B30", label: "Gecikmeli" },
-  "planlandı": { color: "#0A84FF", label: "Planlandı" },
+  "devam": { color: GOLD, label: "Devam Ediyor" },
+  "gecikmeli": { color: ROMA_RED, label: "Gecikmeli" },
+  "planlandı": { color: STOIC_NAVY, label: "Planlandı" },
   "yapıldı": { color: "#30D158", label: "Yapıldı" },
-  "bekliyor": { color: "#FF9F0A", label: "Bekliyor" },
+  "bekliyor": { color: GOLD, label: "Bekliyor" },
   "yanıtlandı": { color: "#30D158", label: "Yanıtlandı" },
   "kapatıldı": { color: "#8A8A8E", label: "Kapatıldı" },
 };
 
 const MSG_TYPE = {
-  soru: { color: "#0A84FF", label: "Soru" },
-  destek: { color: "#FF9F0A", label: "Destek" },
+  soru: { color: STOIC_NAVY, label: "Soru" },
+  destek: { color: GOLD, label: "Destek" },
   bilgi: { color: "#30D158", label: "Bilgi" },
-  dosya: { color: "#BF5AF2", label: "Dosya İsteği" },
+  dosya: { color: ROMA_RED, label: "Dosya İsteği" },
 };
 
 function Modal({ title, onClose, children }) {
@@ -150,15 +188,15 @@ function LoginPage({ onLogin }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#1C1C1E", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fff", borderRadius: 20, padding: "36px 32px", width: 380, boxShadow: "0 32px 80px rgba(0,0,0,.4)" }}>
+    <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 380, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
         <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 21, fontWeight: 800 }}>🏛 DernekYönetim</div>
-          <div style={{ fontSize: 13, color: "#8A8A8E", marginTop: 3 }}>Panele giriş yapın</div>
+          <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.3, fontFamily: FONT_SERIF, color: "#181715" }}>Marcus</div>
+          <div style={{ fontSize: 13, color: "#5E5A55", marginTop: 3 }}>Panele giris yapin</div>
         </div>
         <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
         <div style={{ marginBottom: 18 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
-        {err && <div style={{ color: "#FF3B30", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#FF3B3011", borderRadius: 7 }}>{err}</div>}
+        {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
         <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handle} disabled={loading}>
           {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
         </button>
@@ -172,7 +210,7 @@ function LoginPage({ onLogin }) {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, currentUser, userProfile }) {
-  const mine = userProfile?.role === "Admin" ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
+  const mine = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
   const myMsgs = messages.filter(m => m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId);
   const pendingMsgs = myMsgs.filter(m => m.status === "bekliyor").length;
   const pendingFiles = fileRequests.filter(f => f.toDeptId === userProfile?.deptId && f.status === "bekliyor").length;
@@ -182,7 +220,7 @@ function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, curr
   return (
     <div>
       <div style={S.grid4}>
-        {[["Toplam Görev", mine.length, "#0A84FF"], ["Tamamlandı", mine.filter(t => t.status === "tamamlandı").length, "#30D158"], ["Bekleyen Mesaj", pendingMsgs, "#FF9F0A"], ["Dosya Talebi", pendingFiles, "#BF5AF2"]].map(([label, num, color]) => (
+        {[["Toplam Görev", mine.length, STOIC_NAVY], ["Tamamlandı", mine.filter(t => t.status === "tamamlandı").length, "#30D158"], ["Bekleyen Mesaj", pendingMsgs, GOLD], ["Dosya Talebi", pendingFiles, ROMA_RED]].map(([label, num, color]) => (
           <div key={label} style={S.stat(color)}>
             <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -1 }}>{num}</div>
             <div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div>
@@ -251,7 +289,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
 
   const visible = useMemo(() => {
-    let list = userProfile?.role === "Admin" ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
+    let list = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => t.deptId === userProfile?.deptId || t.assignedTo === currentUser?.uid);
     if (fDept !== "all") list = list.filter(t => t.deptId === fDept);
     if (fStatus !== "all") list = list.filter(t => t.status === fStatus);
     if (search) list = list.filter(t => t.title.toLowerCase().includes(search.toLowerCase()));
@@ -287,7 +325,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
             <option value="gecikmeli">Gecikmeli</option>
           </select>
         </div>
-        {userProfile?.role !== "Genel Üye" && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
+        {roleLevel(userProfile?.role) > 0 && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -304,7 +342,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
                   <td style={{ ...S.td, minWidth: 100 }}><div style={S.pb}><div style={S.pbF(t.progress)} /></div><div style={{ fontSize: 10.5, color: "#8A8A8E", marginTop: 2 }}>{t.progress}%</div></td>
                   <td style={S.td}><div style={S.flex(5)}>
                     <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>
-                    {userProfile?.role === "Admin" && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#FF3B30" }} onClick={() => del(t.id)}><Icon name="trash" size={13} /></button>}
+                    {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(t.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
                 </tr>
               ))}
@@ -350,7 +388,7 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
 function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
   const [reportModal, setReportModal] = useState(null);
-  const visible = userProfile?.role === "Admin" ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
+  const visible = hasAdminRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
   const emptyM = { title: "", deptId: depts[0]?.id || "", datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
 
   const save = async m => {
@@ -359,8 +397,32 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     setModal(null);
   };
   const del = async id => await deleteDoc(doc(db, "meetings", id));
-  const saveReport = async (id, report) => {
-    await updateDoc(doc(db, "meetings", id), { report, status: "yapıldı" });
+  const saveReport = async ({ meetingId, report, attendedParticipantIds }) => {
+    const meeting = meetings.find(m => m.id === meetingId);
+    if (!meeting) return;
+
+    const invitedParticipantIds = meeting.participants || [];
+    const attendedSet = new Set(attendedParticipantIds || []);
+    const date = dayFromDateTime(meeting.datetime);
+
+    await updateDoc(doc(db, "meetings", meetingId), {
+      report: { ...report, attendedParticipantIds: Array.from(attendedSet), invitedParticipantIds },
+      status: "yapıldı",
+    });
+
+    const attendanceWrites = invitedParticipantIds.map(userId => setDoc(doc(db, "attendance", `${meetingId}_${userId}`), {
+      meetingId,
+      meetingTitle: meeting.title,
+      userId,
+      date,
+      deptId: meeting.deptId || null,
+      status: attendedSet.has(userId) ? "katildi" : "gelmedi",
+      source: "meeting-report",
+      updatedBy: currentUser?.uid || null,
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+
+    await Promise.all(attendanceWrites);
     setReportModal(null);
   };
   const getName = id => users.find(u => u.id === id)?.name || "—";
@@ -370,7 +432,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 14 }}>
         <div />
-        {userProfile?.role !== "Genel Üye" && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
+        {roleLevel(userProfile?.role) > 0 && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -387,7 +449,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
                   <td style={S.td}><div style={S.flex(5)}>
                     {m.status === "planlandı" && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", meeting: { ...m } })}><Icon name="edit" size={13} /></button>}
                     <button style={{ ...S.btn("green"), padding: "4px 11px", fontSize: 12 }} onClick={() => setReportModal(m)}><Icon name="reports" size={12} /> Rapor</button>
-                    {userProfile?.role === "Admin" && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#FF3B30" }} onClick={() => del(m.id)}><Icon name="trash" size={13} /></button>}
+                    {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(m.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
                 </tr>
               ))}
@@ -429,24 +491,57 @@ function MeetingModal({ mode, meeting, depts, users, onSave, onClose }) {
 function ReportModal({ meeting, users, depts, onSave, onClose }) {
   const [kararlar, setKararlar] = useState(meeting.report?.kararlar || "");
   const [aksiyonlar, setAksiyonlar] = useState(meeting.report?.aksiyonlar || "");
+  const [attendedParticipantIds, setAttendedParticipantIds] = useState(
+    meeting.report?.attendedParticipantIds || meeting.participants || []
+  );
   const getName = id => users.find(u => u.id === id)?.name || id;
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
+  const toggleAttended = id => {
+    setAttendedParticipantIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
   const printPdf = () => {
-    const w = window.open("", "_blank");
-    w.document.write(`<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${meeting.title}</title><style>body{font-family:Calibri,Arial;padding:40px;font-size:13px;line-height:1.7;}h1{font-size:20px;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:18px;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #ccc;}td:first-child{font-weight:700;background:#f9f9f9;width:130px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#666;margin:20px 0 8px;}.box{border:1px solid #ccc;border-radius:4px;padding:12px;min-height:70px;white-space:pre-wrap;}</style></head><body><h1>Toplantı Raporu</h1><table><tr><td>Toplantı</td><td>${meeting.title}</td></tr><tr><td>Departman</td><td>${getDept(meeting.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(meeting.datetime)}</td></tr><tr><td>Katılımcılar</td><td>${(meeting.participants || []).map(getName).join(", ")}</td></tr></table><h2>Alınan Kararlar</h2><div class="box">${kararlar || "—"}</div><h2>Aksiyon Maddeleri</h2><div class="box">${aksiyonlar || "—"}</div><script>window.onload=()=>window.print();<\/script></body></html>`);
-    w.document.close();
+    openPrintableReport({
+      title: meeting.title,
+      bodyHtml: `<h1>Toplanti Raporu</h1><table><tr><td>Toplanti</td><td>${meeting.title}</td></tr><tr><td>Departman</td><td>${getDept(meeting.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(meeting.datetime)}</td></tr><tr><td>Davetliler</td><td>${(meeting.participants || []).map(getName).join(", ")}</td></tr><tr><td>Katilanlar</td><td>${(attendedParticipantIds || []).map(getName).join(", ") || "-"}</td></tr></table><h2>Alinan Kararlar</h2><div class="box">${kararlar || "-"}</div><h2>Aksiyon Maddeleri</h2><div class="box">${aksiyonlar || "-"}</div>`,
+    });
   };
   return (
     <Modal title="Toplantı Raporu" onClose={onClose}>
-      <div style={{ background: "#F5F4F0", borderRadius: 9, padding: "11px 14px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.9 }}>
+      <div style={{ background: "#FFFFFF", border: "1px solid #E5E5E5", borderRadius: 9, padding: "11px 14px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.9 }}>
         <div><strong>Toplantı:</strong> {meeting.title}</div>
         <div><strong>Tarih:</strong> {fmtDateTime(meeting.datetime)}</div>
       </div>
       <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><textarea style={{ ...S.textarea, minHeight: 80 }} value={kararlar} onChange={e => setKararlar(e.target.value)} /></div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Katilanlar (otomatik devamsizlik icin isaretleyin)</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
+          {(meeting.participants || []).map(id => {
+            const active = attendedParticipantIds.includes(id);
+            return (
+              <div
+                key={id}
+                onClick={() => toggleAttended(id)}
+                style={{
+                  padding: "4px 11px",
+                  borderRadius: 20,
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  background: active ? "#1C1C1E" : "#FFFFFF",
+                  color: active ? "#fff" : "#1C1C1E",
+                  border: active ? `1px solid ${GOLD}` : "1px solid #DADADA",
+                }}
+              >
+                {getName(id)}
+              </div>
+            );
+          })}
+        </div>
+      </div>
       <div style={{ marginBottom: 16 }}><label style={S.label}>Aksiyon Maddeleri</label><textarea style={{ ...S.textarea, minHeight: 80 }} value={aksiyonlar} onChange={e => setAksiyonlar(e.target.value)} /></div>
       <div style={{ ...S.flexBetween }}>
         <button style={S.btn("ghost")} onClick={printPdf}><Icon name="download" size={13} /> PDF</button>
-        <div style={S.flex(7)}><button style={S.btn("ghost")} onClick={onClose}>İptal</button><button style={S.btn()} onClick={() => onSave(meeting.id, { kararlar, aksiyonlar })}>Kaydet</button></div>
+        <div style={S.flex(7)}><button style={S.btn("ghost")} onClick={onClose}>İptal</button><button style={S.btn()} onClick={() => onSave({ meetingId: meeting.id, report: { kararlar, aksiyonlar }, attendedParticipantIds })}>Kaydet</button></div>
       </div>
     </Modal>
   );
@@ -455,7 +550,8 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
 // ─── DEPARTMENTS ──────────────────────────────────────────────────────────────
 function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
   const [modal, setModal] = useState(null);
-  if (userProfile?.role !== "Admin") return <div style={S.card}><div style={S.empty}>Admin yetkisi gereklidir.</div></div>;
+  const [expandedDept, setExpandedDept] = useState(null);
+  const isAdmin = hasAdminRole(userProfile?.role);
 
   const save = async d => {
     if (modal.mode === "add") await addDoc(collection(db, "depts"), d);
@@ -469,26 +565,55 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
 
   return (
     <div>
-      <div style={{ ...S.flexBetween, marginBottom: 14 }}><div /><button style={S.btn()} onClick={() => setModal({ mode: "add", dept: { name: "", desc: "" } })}><Icon name="plus" size={15} /> Departman Ekle</button></div>
+      <div style={{ ...S.flexBetween, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, color: "#8A8A8E" }}>Departmana tıklayarak üyeleri görüntüleyin</div>
+        {isAdmin && <button style={S.btn()} onClick={() => setModal({ mode: "add", dept: { name: "", desc: "" } })}><Icon name="plus" size={15} /> Departman Ekle</button>}
+      </div>
       <div style={S.grid3}>
-        {depts.map(d => (
-          <div key={d.id} style={{ ...S.card, position: "relative" }}>
-            <div style={{ position: "absolute", top: 12, right: 12, ...S.flex(5) }}>
-              <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", dept: { ...d } })}><Icon name="edit" size={13} /></button>
-              <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#FF3B30" }} onClick={() => del(d.id)}><Icon name="trash" size={13} /></button>
-            </div>
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, paddingRight: 68 }}>{d.name}</div>
-            <div style={{ fontSize: 12.5, color: "#636366", marginBottom: 14 }}>{d.desc}</div>
-            <div style={{ display: "flex", gap: 18 }}>
-              {[["Görev", tasks.filter(t => t.deptId === d.id).length, "#0A84FF"], ["Toplantı", meetings.filter(m => m.deptId === d.id).length, "#30D158"], ["Üye", users.filter(u => u.deptId === d.id).length, "#FF9F0A"]].map(([label, num, color]) => (
-                <div key={label} style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color }}>{num}</div>
-                  <div style={{ fontSize: 11, color: "#8A8A8E" }}>{label}</div>
+        {depts.map(d => {
+          const members = users.filter(u => u.deptId === d.id);
+          const isExp = expandedDept === d.id;
+          return (
+            <div key={d.id} style={{ ...S.card, position: "relative", cursor: "pointer", border: isExp ? `1px solid ${STOIC_NAVY}` : "1px solid #E5E5E5" }}
+              onClick={() => setExpandedDept(isExp ? null : d.id)}>
+              <div style={{ position: "absolute", top: 12, right: 12, ...S.flex(5) }} onClick={e => e.stopPropagation()}>
+                {isAdmin && <>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", dept: { ...d } })}><Icon name="edit" size={13} /></button>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(d.id)}><Icon name="trash" size={13} /></button>
+                </>}
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, paddingRight: 68 }}>{d.name}</div>
+              <div style={{ fontSize: 12.5, color: "#636366", marginBottom: 14 }}>{d.desc}</div>
+              <div style={{ display: "flex", gap: 18, alignItems: "flex-end", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", gap: 18 }}>
+                  {[["Görev", tasks.filter(t => t.deptId === d.id).length, STOIC_NAVY], ["Toplantı", meetings.filter(m => m.deptId === d.id).length, "#30D158"], ["Üye", members.length, GOLD]].map(([label, num, color]) => (
+                    <div key={label} style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 800, color }}>{num}</div>
+                      <div style={{ fontSize: 11, color: "#8A8A8E" }}>{label}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+                <div style={{ fontSize: 11, color: isExp ? STOIC_NAVY : "#8A8A8E", fontWeight: 600 }}>{isExp ? "▲ Kapat" : "▼ Üyeler"}</div>
+              </div>
+              {isExp && (
+                <div style={{ borderTop: "1px solid #E5E5E5", marginTop: 14, paddingTop: 12 }} onClick={e => e.stopPropagation()}>
+                  {members.length === 0 ? (
+                    <div style={{ ...S.empty, padding: "10px 0" }}>Bu departmanda üye yok</div>
+                  ) : members.map(u => (
+                    <div key={u.id} style={{ ...S.flex(10), padding: "7px 0", borderBottom: "1px solid #F5F5F5" }}>
+                      <div style={{ ...S.avatar(avatarColor(u.id)), width: 30, height: 30, fontSize: 10 }}>{u.avatar || u.name?.[0]}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: "#8A8A8E" }}>{u.title || u.role}</div>
+                      </div>
+                      <span style={{ ...S.badge(STOIC_NAVY), fontSize: 10 }}>{u.role}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {modal && <Modal title={modal.mode === "add" ? "Yeni Departman" : "Düzenle"} onClose={() => setModal(null)}>
         <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
@@ -506,9 +631,9 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
   const [modal, setModal] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  if (userProfile?.role !== "Admin") return <div style={S.card}><div style={S.empty}>Admin yetkisi gereklidir.</div></div>;
+  if (!hasAdminRole(userProfile?.role)) return <div style={S.card}><div style={S.empty}>Başkan yetkisi gereklidir.</div></div>;
 
-  const ROLE_COLOR = { Admin: "#FF3B30", "Departman Üyesi": "#0A84FF", "Genel Üye": "#30D158" };
+  const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158" };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
   const createUser = async () => {
@@ -546,7 +671,7 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
 
   return (
     <div>
-      <div style={{ ...S.flexBetween, marginBottom: 14 }}><div /><button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Genel Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button></div>
+      <div style={{ ...S.flexBetween, marginBottom: 14 }}><div /><button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button></div>
       <div style={S.card}>
         <table style={S.table}>
           <thead><tr>{["İsim", "E-posta", "Unvan", "Rol", "Departman", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -555,7 +680,7 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
               <td style={S.td}><div style={S.flex(8)}><div style={S.avatar(avatarColor(u.id))}>{u.avatar || u.name?.[0]}</div><strong>{u.name}</strong></div></td>
               <td style={S.td}>{u.email}</td>
               <td style={S.td}><span style={{ fontSize: 12.5, color: "#636366" }}>{u.title || "—"}</span></td>
-              <td style={S.td}><span style={S.badge(ROLE_COLOR[u.role] || "#999")}>{u.role}</span></td>
+              <td style={S.td}><span style={S.badge(ROLE_COLOR[u.role] || "#999")}>{displayRole(u.role)}</span></td>
               <td style={S.td}>{u.deptId ? getDept(u.deptId) : <span style={{ color: "#8A8A8E" }}>—</span>}</td>
               <td style={S.td}><button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", user: { ...u } })}><Icon name="edit" size={13} /></button></td>
             </tr>
@@ -573,10 +698,10 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
             <div><label style={S.label}>Şifre</label><input type="password" style={S.input} value={modal.user.password} onChange={e => setModal(p => ({ ...p, user: { ...p.user, password: e.target.value } }))} /></div>
           </>}
           <div style={S.formRow}>
-            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option>Admin</option><option>Departman Üyesi</option><option>Genel Üye</option></select></div>
+            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option></select></div>
             <div><label style={S.label}>Departman</label><select style={S.select} value={modal.user.deptId || ""} onChange={e => setModal(p => ({ ...p, user: { ...p.user, deptId: e.target.value || null } }))}><option value="">—</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
-          {err && <div style={{ color: "#FF3B30", fontSize: 12 }}>{err}</div>}
+          {err && <div style={{ color: "#6A5610", fontSize: 12 }}>{err}</div>}
           <div style={{ ...S.flex(10), justifyContent: "flex-end" }}><button style={S.btn("ghost")} onClick={() => setModal(null)}>İptal</button><button style={S.btn()} onClick={modal.mode === "add" ? createUser : updateUser} disabled={loading}>{loading ? "Kaydediliyor…" : "Kaydet"}</button></div>
         </div>
       </Modal>}
@@ -621,7 +746,7 @@ function MessagesPage({ messages, users, depts, currentUser, userProfile }) {
         </div>
         <div style={S.card}>
           {list.length === 0 ? <div style={S.empty}>Mesaj yok</div> : list.map(m => (
-            <div key={m.id} onClick={() => setSelected(m.id === selected ? null : m.id)} style={{ padding: "12px 14px", borderRadius: 10, cursor: "pointer", marginBottom: 4, background: selected === m.id ? "#F0F0F5" : "transparent", border: selected === m.id ? "1px solid #E5E5EA" : "1px solid transparent" }}>
+            <div key={m.id} onClick={() => setSelected(m.id === selected ? null : m.id)} style={{ padding: "12px 14px", borderRadius: 10, cursor: "pointer", marginBottom: 4, background: selected === m.id ? "#FFFFFF" : "transparent", border: selected === m.id ? "1px solid #DADADA" : "1px solid transparent" }}>
               <div style={S.flexBetween}>
                 <div style={S.flex(8)}>
                   <div style={S.avatar(avatarColor(m.fromId))}>{users.find(u => u.id === m.fromId)?.avatar || "?"}</div>
@@ -640,13 +765,13 @@ function MessagesPage({ messages, users, depts, currentUser, userProfile }) {
         <div style={S.card}>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{selMsg.subject}</div>
           <div style={{ fontSize: 12, color: "#8A8A8E", marginBottom: 16 }}>{getName(selMsg.fromId)} → {selMsg.toId ? getName(selMsg.toId) : getDept(selMsg.toDeptId)} · {timeAgo(selMsg.createdAt)}</div>
-          <div style={{ padding: "14px", background: "#F9F9F9", borderRadius: 10, fontSize: 13, lineHeight: 1.7, marginBottom: 16 }}>{selMsg.body}</div>
+          <div style={{ padding: "14px", background: "#FFFFFF", border: "1px solid #E5E5E5", borderRadius: 10, fontSize: 13, lineHeight: 1.7, marginBottom: 16 }}>{selMsg.body}</div>
           {(selMsg.replies || []).map(r => (
             <div key={r.id} style={{ ...S.flex(10), marginBottom: 10, alignItems: "flex-start" }}>
               <div style={S.avatar(avatarColor(r.fromId))}>{users.find(u => u.id === r.fromId)?.avatar || "?"}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#636366" }}>{getName(r.fromId)}</div>
-                <div style={{ fontSize: 13, marginTop: 3, padding: "8px 12px", background: "#F0F0F5", borderRadius: 8 }}>{r.body}</div>
+                <div style={{ fontSize: 13, marginTop: 3, padding: "8px 12px", background: "#FFFFFF", border: "1px solid #E5E5E5", borderRadius: 8 }}>{r.body}</div>
               </div>
             </div>
           ))}
@@ -698,7 +823,7 @@ function FileRequestsPage({ fileRequests, users, depts, currentUser, userProfile
   const [responseText, setResponseText] = useState("");
   const getName = id => users.find(u => u.id === id)?.name || "—";
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
-  const incoming = fileRequests.filter(f => f.toDeptId === userProfile?.deptId || userProfile?.role === "Admin");
+  const incoming = fileRequests.filter(f => f.toDeptId === userProfile?.deptId || hasAdminRole(userProfile?.role));
   const outgoing = fileRequests.filter(f => f.fromId === currentUser?.uid);
   const list = tab === "gelen" ? incoming : outgoing;
 
@@ -764,37 +889,223 @@ function FileRequestForm({ depts, userProfile, onSend, onClose }) {
   );
 }
 
+// ─── ATTENDANCE ───────────────────────────────────────────────────────────────
+function AttendancePage({ attendance, users, depts, currentUser, userProfile }) {
+  const [selectedDate, setSelectedDate] = useState(today());
+  const [selectedDept, setSelectedDept] = useState("all");
+  const roleRestrictedDept = hasAdminRole(userProfile?.role) ? null : userProfile?.deptId;
+  const getDept = id => depts.find(d => d.id === id)?.name || "—";
+  const getName = id => users.find(u => u.id === id)?.name || "—";
+  const statusLabel = {
+    katildi: "Katildi",
+    gelmedi: "Gelmedi",
+    izinli: "Izinli",
+  };
+  const records = useMemo(() => {
+    return attendance
+      .filter(r => r.date === selectedDate)
+      .filter(r => !roleRestrictedDept || r.deptId === roleRestrictedDept)
+      .filter(r => selectedDept === "all" || r.deptId === selectedDept)
+      .sort((a, b) => (a.meetingTitle || "").localeCompare(b.meetingTitle || "", "tr"));
+  }, [attendance, selectedDate, selectedDept, roleRestrictedDept]);
+
+  const stats = records.reduce((acc, r) => {
+    const status = r.status;
+    if (status === "katildi") acc.present += 1;
+    if (status === "gelmedi") acc.absent += 1;
+    if (status === "izinli") acc.excused += 1;
+    return acc;
+  }, { present: 0, absent: 0, excused: 0 });
+
+  return (
+    <div>
+      <div style={{ ...S.grid4, marginBottom: 14 }}>
+        {[ ["Katildi", stats.present, "#2A7A62"], ["Gelmedi", stats.absent, ROMA_RED], ["Izinli", stats.excused, GOLD], ["Toplam Kayit", records.length, STOIC_NAVY] ].map(([label, num, color]) => (
+          <div key={label} style={S.stat(color)}>
+            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -1 }}>{num}</div>
+            <div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...S.card, marginBottom: 14 }}>
+        <div style={{ ...S.flexBetween, gap: 10, flexWrap: "wrap" }}>
+          <div style={S.flex(8)}>
+            <div>
+              <label style={S.label}>Tarih</label>
+              <input type="date" style={{ ...S.input, width: 160 }} value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+            </div>
+            <div>
+              <label style={S.label}>Departman</label>
+              <select style={{ ...S.select, width: 180 }} value={selectedDept} onChange={e => setSelectedDept(e.target.value)}>
+                <option value="all">Tum Departmanlar</option>
+                {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ fontSize: 12.5, color: "#6B6B65", maxWidth: 350 }}>
+            Devamsizlik kayitlari otomatik olarak toplanti raporu kaydedildiginde uretilir.
+          </div>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <table style={S.table}>
+          <thead>
+            <tr>{["Toplanti", "Kisi", "Departman", "Durum", "Kaynak"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {records.length === 0 ? (
+              <tr><td colSpan={5} style={{ ...S.td, textAlign: "center", color: "#8A8A8E" }}>Kayit bulunamadi</td></tr>
+            ) : records.map(r => {
+              const status = r.status;
+              return (
+                <tr key={r.id}>
+                  <td style={S.td}><strong>{r.meetingTitle || "Toplanti"}</strong></td>
+                  <td style={S.td}>{getName(r.userId)}</td>
+                  <td style={S.td}>{r.deptId ? getDept(r.deptId) : "—"}</td>
+                  <td style={S.td}>
+                    <span style={S.badge(status === "katildi" ? "#2A7A62" : status === "gelmedi" ? ROMA_RED : status === "izinli" ? GOLD : "#8A8A8E")}>{statusLabel[status] || "—"}</span>
+                  </td>
+                  <td style={S.td}><span style={S.tag}>{r.source === "meeting-report" ? "Toplanti" : "Manuel"}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── ORG TREE ─────────────────────────────────────────────────────────────────
 function OrgTreePage({ users, depts, userProfile }) {
   const [selected, setSelected] = useState(null);
-  const roots = users.filter(u => !u.managerId);
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
-  function OrgNode({ user, depth = 0 }) {
-    const children = users.filter(u => u.managerId === user.id);
+  const nodeColor = r => {
+    if (hasAdminRole(r)) return ROMA_RED;
+    if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return STOIC_NAVY;
+    return "#30D158";
+  };
+
+  // Build tree roots: Başkan/Admin users at top
+  const roots = users.filter(u => hasAdminRole(u.role));
+
+  function getChildren(user) {
+    const explicit = users.filter(u => u.managerId === user.id);
+    const explicitIds = new Set(explicit.map(c => c.id));
+    let implicit = [];
+
+    if (hasAdminRole(user.role)) {
+      // 1. Departman Yöneticileri doğrudan Başkana bağlanır
+      const deptManagers = users.filter(u => 
+        u.role === "Departman Yöneticisi" && 
+        !u.managerId && 
+        !explicitIds.has(u.id)
+      );
+      
+      // 2. Kendi departmanında "Departman Yöneticisi" olmayan üyeler yetim kalıp gizlenmesin diye doğrudan Başkana bağlanır
+      const orphanedMembers = users.filter(u => {
+        if (hasAdminRole(u.role) || u.role === "Departman Yöneticisi" || u.managerId || explicitIds.has(u.id)) return false;
+        const hasManagerInDept = users.some(other => other.deptId === u.deptId && other.role === "Departman Yöneticisi");
+        return !hasManagerInDept;
+      });
+
+      implicit = [...deptManagers, ...orphanedMembers];
+    } else if (user.role === "Departman Yöneticisi") {
+      // 3. Departman Yöneticisine doğrudan bağlı olanlar, aynı departmandaki diğer normal üyelerdir
+      implicit = users.filter(u => 
+        !hasAdminRole(u.role) && 
+        u.role !== "Departman Yöneticisi" && 
+        u.deptId === user.deptId && 
+        !u.managerId && 
+        !explicitIds.has(u.id)
+      );
+    }
+
+    return [...explicit, ...implicit];
+  }
+
+  function OrgNode({ user }) {
+    const children = getChildren(user);
     const isSel = selected === user.id;
+    const rc = nodeColor(user.role);
+
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <div onClick={() => setSelected(isSel ? null : user.id)} style={{ background: isSel ? "#1C1C1E" : "#fff", color: isSel ? "#fff" : "#1C1C1E", border: `2px solid ${isSel ? "#1C1C1E" : "#E5E5EA"}`, borderRadius: 12, padding: "12px 16px", minWidth: 155, cursor: "pointer", boxShadow: isSel ? "0 4px 20px rgba(0,0,0,.18)" : "0 1px 4px rgba(0,0,0,.06)" }}>
+        {/* Card */}
+        <div
+          onClick={() => setSelected(isSel ? null : user.id)}
+          style={{
+            background: isSel ? STOIC_NAVY : "#FFFFFF",
+            color: isSel ? "#F7F7F5" : "#161513",
+            border: `1px solid ${isSel ? STOIC_NAVY : "#E5E5E5"}`,
+            borderTop: `3px solid ${rc}`,
+            borderRadius: 10,
+            padding: "10px 14px",
+            minWidth: 160,
+            cursor: "pointer",
+            boxShadow: isSel ? "0 4px 16px rgba(0,0,0,.14)" : "0 2px 8px rgba(0,0,0,.06)",
+          }}
+        >
           <div style={{ ...S.flex(8), marginBottom: 6 }}>
-            <div style={{ ...S.avatar(isSel ? "#ffffff33" : avatarColor(user.id)), color: isSel ? "#fff" : "#fff", width: 28, height: 28, fontSize: 10 }}>{user.avatar || user.name?.[0]}</div>
-            <div><div style={{ fontSize: 12.5, fontWeight: 700 }}>{user.name}</div><div style={{ fontSize: 10.5, opacity: 0.65 }}>{user.title || user.role}</div></div>
-          </div>
-          <span style={{ ...S.badge(isSel ? "#ffffff33" : "#0A84FF"), color: isSel ? "#fff" : "#0A84FF", fontSize: 10 }}>{user.role === "Admin" ? "Admin" : getDept(user.deptId)}</span>
-        </div>
-        {children.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: 2, height: 20, background: "#E5E5EA" }} />
-            <div style={{ display: "flex", gap: 20, alignItems: "flex-start", position: "relative" }}>
-              {children.length > 1 && <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: `${(children.length - 1) * 175}px`, height: 2, background: "#E5E5EA" }} />}
-              {children.map(child => (
-                <div key={child.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <div style={{ width: 2, height: 20, background: "#E5E5EA" }} />
-                  <OrgNode user={child} depth={depth + 1} />
-                </div>
-              ))}
+            <div style={{ ...S.avatar(avatarColor(user.id)), width: 30, height: 30, fontSize: 10 }}>
+              {user.avatar || user.name?.[0]}
+            </div>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>{user.name}</div>
+              <div style={{ fontSize: 10.5, color: isSel ? "rgba(255,255,255,.6)" : "#8A8A8E" }}>
+                {user.title || displayRole(user.role)}
+              </div>
             </div>
           </div>
+          <div style={{ ...S.flex(6), flexWrap: "wrap", gap: 5 }}>
+            <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 10, background: rc + "22", color: rc, fontWeight: 600 }}>
+              {displayRole(user.role)}
+            </span>
+            {!hasAdminRole(user.role) && user.deptId && (
+              <span style={{ fontSize: 10, color: isSel ? "rgba(255,255,255,.5)" : "#8A8A8E" }}>
+                {getDept(user.deptId)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Connector + children */}
+        {children.length > 0 && (
+          <>
+            {/* Vertical stem from parent */}
+            <div style={{ width: 2, height: 22, background: "#D0D0D0" }} />
+
+            {children.length === 1 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={{ width: 2, height: 22, background: "#D0D0D0" }} />
+                <OrgNode user={children[0]} />
+              </div>
+            ) : (
+              /* Railroad connector: gap=0, padding creates spacing so adjacent bars touch */
+              <div style={{ display: "flex", gap: 0, alignItems: "flex-start" }}>
+                {children.map((child, i) => (
+                  <div key={child.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0 14px" }}>
+                    {/* Top bar — gradient hides outside half on edge nodes */}
+                    <div style={{
+                      alignSelf: "stretch",
+                      height: 2,
+                      background:
+                        i === 0
+                          ? "linear-gradient(to right, transparent 50%, #D0D0D0 50%)"
+                          : i === children.length - 1
+                            ? "linear-gradient(to right, #D0D0D0 50%, transparent 50%)"
+                            : "#D0D0D0",
+                    }} />
+                    <div style={{ width: 2, height: 22, background: "#D0D0D0" }} />
+                    <OrgNode user={child} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -803,23 +1114,36 @@ function OrgTreePage({ users, depts, userProfile }) {
   const selUser = users.find(u => u.id === selected);
   return (
     <div>
-      <div style={{ ...S.card, overflow: "auto", marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "center", padding: "20px 0", minWidth: 500 }}>
-          <div style={{ display: "flex", gap: 32 }}>
-            {roots.map(r => <OrgNode key={r.id} user={r} />)}
-          </div>
+      <div style={{ ...S.card, overflow: "auto", marginBottom: selUser ? 14 : 0 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: "32px 24px", minWidth: 560 }}>
+          {roots.length === 0 ? (
+            <div style={S.empty}>"Başkan" rolünde kullanıcı bulunamadı</div>
+          ) : roots.length === 1 ? (
+            <OrgNode user={roots[0]} />
+          ) : (
+            <div style={{ display: "flex", gap: 48, alignItems: "flex-start" }}>
+              {roots.map(r => <OrgNode key={r.id} user={r} />)}
+            </div>
+          )}
         </div>
       </div>
       {selUser && (
         <div style={{ ...S.card, ...S.flex(16) }}>
-          <div style={{ ...S.avatar(avatarColor(selUser.id)), width: 52, height: 52, fontSize: 16 }}>{selUser.avatar || selUser.name?.[0]}</div>
+          <div style={{ ...S.avatar(avatarColor(selUser.id)), width: 52, height: 52, fontSize: 16 }}>
+            {selUser.avatar || selUser.name?.[0]}
+          </div>
           <div>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{selUser.name}</div>
-            <div style={{ fontSize: 13, color: "#636366" }}>{selUser.title} · {selUser.role}</div>
+            <div style={{ fontSize: 13, color: "#636366" }}>{selUser.title} · {displayRole(selUser.role)}</div>
             <div style={{ fontSize: 12.5, color: "#8A8A8E" }}>{selUser.email}</div>
-            <div style={{ ...S.flex(8), marginTop: 8 }}>
-              <span style={S.tag}>{getDept(selUser.deptId)}</span>
-              {selUser.managerId && <span style={S.tag}>Yöneticisi: {users.find(u => u.id === selUser.managerId)?.name}</span>}
+            <div style={{ ...S.flex(8), flexWrap: "wrap", marginTop: 8 }}>
+              {selUser.deptId && <span style={S.tag}>{getDept(selUser.deptId)}</span>}
+              {selUser.managerId && (
+                <span style={S.tag}>Üst: {users.find(u => u.id === selUser.managerId)?.name}</span>
+              )}
+              {getChildren(selUser).length > 0 && (
+                <span style={S.tag}>{getChildren(selUser).length} kişi yönetiyor</span>
+              )}
             </div>
           </div>
         </div>
@@ -841,6 +1165,7 @@ export default function App() {
   const [meetings, setMeetings] = useState([]);
   const [messages, setMessages] = useState([]);
   const [fileRequests, setFileRequests] = useState([]);
+  const [attendance, setAttendance] = useState([]);
 
   // Auth listener
   useEffect(() => {
@@ -854,8 +1179,63 @@ export default function App() {
   // Load user profile
   useEffect(() => {
     if (!currentUser) { setUserProfile(null); return; }
-    const unsub = onSnapshot(doc(db, "users", currentUser.uid), snap => {
-      if (snap.exists()) setUserProfile({ id: snap.id, ...snap.data() });
+    const userRef = doc(db, "users", currentUser.uid);
+    const unsub = onSnapshot(userRef, async snap => {
+      if (snap.exists()) {
+        const data = snap.data();
+        let normalizedRole = normalizeRole(data.role);
+
+        // Otomatik olarak Yusuf'u Başkan yap
+        if (data.email === "yusufuveyik@gmail.com" && normalizedRole !== "Başkan") {
+          normalizedRole = "Başkan";
+          await updateDoc(userRef, { role: "Başkan", title: "Başkan" });
+        }
+
+        setUserProfile({ id: snap.id, ...data, role: normalizedRole });
+        return;
+      }
+
+      // If UID changed, try to recover existing profile by email automatically.
+      if (currentUser.email) {
+        try {
+          const byEmail = await getDocs(query(collection(db, "users"), where("email", "==", currentUser.email), limit(1)));
+          if (!byEmail.empty) {
+            const legacyData = byEmail.docs[0].data();
+            const normalizedRole = normalizeRole(legacyData.role);
+            await setDoc(userRef, {
+              ...legacyData,
+              email: currentUser.email,
+              role: normalizedRole,
+              migratedFromUidChange: true,
+            }, { merge: true });
+            return;
+          }
+        } catch (err) {
+          console.error("E-posta ile profil geri yukleme basarisiz:", err);
+        }
+      }
+
+      // Bootstrap profile automatically: first user becomes Admin.
+      try {
+        const firstUserSnap = await getDocs(query(collection(db, "users"), limit(1)));
+        const role = firstUserSnap.empty ? "Başkan" : "Üye";
+        const fallbackName = (currentUser.email || "Kullanici").split("@")[0];
+        const name = currentUser.displayName || fallbackName;
+
+        await setDoc(userRef, {
+          name,
+          email: currentUser.email || "",
+          role,
+          deptId: null,
+          title: role === "Başkan" ? "Yönetici" : "",
+          avatar: name.slice(0, 2).toUpperCase(),
+          managerId: null,
+          createdAt: serverTimestamp(),
+          autoCreated: true,
+        });
+      } catch (err) {
+        console.error("Kullanici profili olusturulamadi:", err);
+      }
     });
     return unsub;
   }, [currentUser]);
@@ -870,6 +1250,7 @@ export default function App() {
       onSnapshot(collection(db, "meetings"), s => setMeetings(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "messages"), s => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "fileRequests"), s => setFileRequests(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+      onSnapshot(collection(db, "attendance"), s => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() })))),
     ];
     return () => subs.forEach(u => u());
   }, [currentUser]);
@@ -877,24 +1258,25 @@ export default function App() {
   const pendingMsgs = messages.filter(m => (m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId) && m.status === "bekliyor").length;
   const pendingFiles = fileRequests.filter(f => f.toDeptId === userProfile?.deptId && f.status === "bekliyor").length;
 
-  if (authLoading) return <div style={{ minHeight: "100vh", background: "#1C1C1E", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16 }}>Yükleniyor…</div>;
+  if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yukleniyor...</div>;
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
-  if (!userProfile) return <div style={{ minHeight: "100vh", background: "#1C1C1E", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16 }}>Profil yükleniyor…</div>;
+  if (!userProfile) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Profil yukleniyor...</div>;
 
   const NAV_GROUPS = [
-    { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }] },
+    { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] },
     { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
     { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }, { id: "filerequests", label: "Dosya Talepleri", icon: "file", badge: pendingFiles }] },
     { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
   ];
-  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", filerequests: "Dosya Talepleri", reports: "Raporlar" };
-  const props = { tasks, meetings, depts, users, messages, fileRequests, currentUser, userProfile };
+  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", filerequests: "Dosya Talepleri", reports: "Raporlar" };
+  const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile };
 
   const renderPage = () => {
     switch (page) {
       case "dashboard": return <Dashboard {...props} />;
       case "tasks": return <TasksPage {...props} />;
       case "meetings": return <MeetingsPage {...props} />;
+      case "attendance": return <AttendancePage {...props} />;
       case "orgtree": return <OrgTreePage {...props} />;
       case "departments": return <DepartmentsPage {...props} />;
       case "userlist": return <UsersPage {...props} />;
@@ -908,9 +1290,8 @@ export default function App() {
   return (
     <div style={S.app}>
       <div style={S.sidebar}>
-        <div style={{ padding: "20px 16px 16px", borderBottom: "1px solid #2C2C2E" }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>🏛 DernekYönetim</div>
-          <div style={{ fontSize: 10.5, color: "#636366", marginTop: 2 }}>v2.0 · Firebase</div>
+        <div style={{ padding: "20px 16px 16px", borderBottom: "1px solid #242427" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#F6F4EE", fontFamily: FONT_SERIF, letterSpacing: 0.6 }}>Marcus</div>
         </div>
         <nav style={S.nav}>
           {NAV_GROUPS.map(g => (
@@ -920,19 +1301,19 @@ export default function App() {
                 <div key={n.id} style={S.navItem(page === n.id)} onClick={() => setPage(n.id)}>
                   <Icon name={n.icon} size={16} />
                   <span style={{ flex: 1 }}>{n.label}</span>
-                  {n.badge > 0 && <span style={{ background: "#FF3B30", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{n.badge}</span>}
+                  {n.badge > 0 && <span style={{ background: ROMA_RED, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{n.badge}</span>}
                 </div>
               ))}
             </div>
           ))}
         </nav>
         <div style={{ padding: "0 8px" }}>
-          <div style={{ background: "#2C2C2E", borderRadius: 8, padding: "10px 12px" }}>
+          <div style={{ background: "rgba(255,255,255,.05)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,.1)" }}>
             <div style={S.flex(8)}>
               <div style={{ ...S.avatar(avatarColor(currentUser.uid)), width: 28, height: 28, fontSize: 10 }}>{userProfile.avatar || userProfile.name?.[0]}</div>
-              <div><div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{userProfile.name}</div><div style={{ fontSize: 10.5, color: "#636366" }}>{userProfile.role}</div></div>
+              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#F6F4EE" }}>{userProfile.name}</div><div style={{ fontSize: 10.5, color: "#B2AEA7" }}>{userProfile.role}</div></div>
             </div>
-            <button onClick={() => signOut(auth)} style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, color: "#FF3B30", fontSize: 11.5, cursor: "pointer", background: "none", border: "none", padding: 0, fontWeight: 600, fontFamily: "inherit" }}>
+            <button onClick={() => signOut(auth)} style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, color: "#E8D2A0", fontSize: 11.5, cursor: "pointer", background: "none", border: "none", padding: 0, fontWeight: 700, fontFamily: "inherit" }}>
               <Icon name="logout" size={13} /> Çıkış Yap
             </button>
           </div>
@@ -940,7 +1321,12 @@ export default function App() {
       </div>
       <div style={S.main}>
         <div style={S.topbar}>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>{TITLES[page]}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 3, height: 24, borderRadius: 2, background: ROMA_RED }} />
+            <div>
+              <div style={{ fontSize: 19, fontWeight: 700, fontFamily: FONT_SERIF, letterSpacing: 0.2, color: "#1B1A18", lineHeight: 1.1 }}>{TITLES[page]}</div>
+            </div>
+          </div>
           <div style={{ fontSize: 12.5, color: "#8A8A8E" }}>{new Date().toLocaleDateString("tr-TR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
         </div>
         <div style={S.content}>{renderPage()}</div>
@@ -950,19 +1336,175 @@ export default function App() {
 }
 
 // ─── REPORTS ─────────────────────────────────────────────────────────────────
-function ReportsPage({ meetings, depts, users }) {
+function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
+  const [seeding, setSeeding] = useState(false);
   const done = meetings.filter(m => m.report);
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || id;
+
+  const seedDemoData = async () => {
+    if (!hasAdminRole(userProfile?.role)) {
+      alert("Ornek veri yuklemek icin Başkan yetkisi gerekir.");
+      return;
+    }
+
+    setSeeding(true);
+    try {
+      const existingDemo = await getDocs(query(collection(db, "meetings"), where("demo", "==", true), limit(1)));
+      if (!existingDemo.empty) {
+        alert("Ornek veriler zaten eklenmis.");
+        setSeeding(false);
+        return;
+      }
+
+      const deptPool = [...depts];
+      if (deptPool.length < 3) {
+        const demoDeptDefs = [
+          { name: "Operasyon", desc: "Saha planlama ve surec takibi" },
+          { name: "Iletisim", desc: "Uyeler ve paydaslarla iletisim" },
+          { name: "Finans", desc: "Butce, odeme ve kaynak yonetimi" },
+        ];
+        for (const d of demoDeptDefs) {
+          const ref = await addDoc(collection(db, "depts"), { ...d, demo: true });
+          deptPool.push({ id: ref.id, ...d, demo: true });
+        }
+      }
+
+      const userPool = [...users];
+      if (userPool.length < 4) {
+        const demoUsers = [
+          { id: "demo_u1", name: "Aylin Demir", email: "aylin.demo@marcus.local", role: "Departman Yöneticisi", deptId: deptPool[0]?.id || null, title: "Operasyon Sorumlusu", avatar: "AD", managerId: null, demo: true },
+          { id: "demo_u2", name: "Can Eren", email: "can.demo@marcus.local", role: "Departman Yöneticisi", deptId: deptPool[1]?.id || null, title: "Iletisim Yöneticisi", avatar: "CE", managerId: null, demo: true },
+          { id: "demo_u3", name: "Mina Kaya", email: "mina.demo@marcus.local", role: "Üye", deptId: deptPool[0]?.id || null, title: "Operasyon Analisti", avatar: "MK", managerId: "demo_u1", demo: true },
+        ];
+        for (const u of demoUsers) {
+          await setDoc(doc(db, "users", u.id), u, { merge: true });
+          userPool.push(u);
+        }
+      }
+
+      const actorId = currentUser?.uid || userPool[0]?.id;
+      const deptA = deptPool[0]?.id || null;
+      const deptB = deptPool[1]?.id || null;
+      const deptC = deptPool[2]?.id || null;
+      const allUsers = userPool.filter(u => u.id !== actorId);
+
+      const meetingA = await addDoc(collection(db, "meetings"), {
+        title: "Nisan Donemi Faaliyet Planlama",
+        deptId: deptA,
+        datetime: `${today()}T10:00`,
+        participants: allUsers.slice(0, 3).map(u => u.id),
+        status: "yapıldı",
+        report: {
+          kararlar: "Aylik etkinlik takvimi onaylandi.",
+          aksiyonlar: "Sorumlu atamalari haftalik yapilacak.",
+          attendedParticipantIds: allUsers.slice(0, 2).map(u => u.id),
+        },
+        createdAt: serverTimestamp(),
+        demo: true,
+      });
+
+      const meetingB = await addDoc(collection(db, "meetings"), {
+        title: "Bagisci Iliskileri Degerlendirme",
+        deptId: deptB,
+        datetime: `${today()}T14:30`,
+        participants: allUsers.slice(1, 4).map(u => u.id),
+        status: "planlandı",
+        report: null,
+        createdAt: serverTimestamp(),
+        demo: true,
+      });
+
+      const attendedA = new Set(allUsers.slice(0, 2).map(u => u.id));
+      for (const participantId of allUsers.slice(0, 3).map(u => u.id)) {
+        await setDoc(doc(db, "attendance", `${meetingA.id}_${participantId}`), {
+          meetingId: meetingA.id,
+          meetingTitle: "Nisan Donemi Faaliyet Planlama",
+          userId: participantId,
+          date: today(),
+          deptId: deptA,
+          status: attendedA.has(participantId) ? "katildi" : "gelmedi",
+          source: "meeting-report",
+          updatedBy: actorId,
+          updatedAt: serverTimestamp(),
+          demo: true,
+        }, { merge: true });
+      }
+
+      await addDoc(collection(db, "tasks"), {
+        title: "Haftalik uye geri bildirim raporu",
+        desc: "Departman bazli geri bildirimlerin siniflandirilmasi",
+        deptId: deptA,
+        assignedTo: allUsers[0]?.id || actorId,
+        startDate: today(),
+        endDate: today(),
+        progress: 65,
+        notes: "Demo gorev kaydi",
+        status: "devam",
+        createdAt: serverTimestamp(),
+        demo: true,
+      });
+
+      await addDoc(collection(db, "tasks"), {
+        title: "Nisan toplanti sunumu",
+        desc: "Yonetim ozeti ve KPI kartlari",
+        deptId: deptB,
+        assignedTo: allUsers[1]?.id || actorId,
+        startDate: today(),
+        endDate: today(),
+        progress: 25,
+        notes: "Demo gorev kaydi",
+        status: "planlandı",
+        createdAt: serverTimestamp(),
+        demo: true,
+      });
+
+      await addDoc(collection(db, "messages"), {
+        type: "bilgi",
+        subject: "Faaliyet raporu guncellemesi",
+        body: "Nisan donemi verileri sisteme eklendi.",
+        fromId: actorId,
+        toDeptId: deptA,
+        status: "yanıtlandı",
+        createdAt: new Date().toISOString(),
+        replies: [],
+        demo: true,
+      });
+
+      await addDoc(collection(db, "fileRequests"), {
+        subject: "Butce revizyon dosyasi",
+        desc: "Q2 butce tablolarinin paylasilmasi talep edilmistir.",
+        fromId: actorId,
+        toDeptId: deptC,
+        status: "bekliyor",
+        createdAt: new Date().toISOString(),
+        response: null,
+        demo: true,
+      });
+
+      await updateDoc(doc(db, "meetings", meetingB.id), { demoLinked: true });
+      alert("Ornek veriler basariyla eklendi.");
+    } catch (err) {
+      console.error("Ornek veri ekleme hatasi:", err);
+      alert("Ornek veriler eklenirken hata olustu.");
+    }
+    setSeeding(false);
+  };
+
   const printReport = m => {
-    const w = window.open("", "_blank");
-    w.document.write(`<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${m.title}</title><style>body{font-family:Calibri,Arial;padding:40px;font-size:13px;line-height:1.7;}h1{font-size:20px;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:18px;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #ccc;}td:first-child{font-weight:700;background:#f9f9f9;width:130px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#666;margin:20px 0 8px;}.box{border:1px solid #ccc;padding:12px;min-height:70px;white-space:pre-wrap;}</style></head><body><h1>Toplantı Raporu</h1><table><tr><td>Toplantı</td><td>${m.title}</td></tr><tr><td>Departman</td><td>${getDept(m.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(m.datetime)}</td></tr><tr><td>Katılımcılar</td><td>${(m.participants || []).map(getName).join(", ")}</td></tr></table><h2>Kararlar</h2><div class="box">${m.report?.kararlar || "—"}</div><h2>Aksiyonlar</h2><div class="box">${m.report?.aksiyonlar || "—"}</div><script>window.onload=()=>window.print();<\/script></body></html>`);
-    w.document.close();
+    openPrintableReport({
+      title: m.title,
+      bodyHtml: `<h1>Toplanti Raporu</h1><table><tr><td>Toplanti</td><td>${m.title}</td></tr><tr><td>Departman</td><td>${getDept(m.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(m.datetime)}</td></tr><tr><td>Katilimcilar</td><td>${(m.participants || []).map(getName).join(", ")}</td></tr></table><h2>Kararlar</h2><div class="box">${m.report?.kararlar || "-"}</div><h2>Aksiyonlar</h2><div class="box">${m.report?.aksiyonlar || "-"}</div>`,
+    });
   };
   return (
     <div>
+      <div style={{ ...S.flexBetween, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, color: "#6B6B65" }}>Rapor, toplanti, departman ve gorevler icin ornek veri ekleyebilirsiniz.</div>
+        <button style={S.btn("primary")} onClick={seedDemoData} disabled={seeding}>{seeding ? "Ekleniyor..." : "Ornek Veri Yukle"}</button>
+      </div>
       <div style={S.grid3}>
-        {[["Toplam", meetings.length, "#0A84FF"], ["Raporlanan", done.length, "#30D158"], ["Bekleyen", meetings.length - done.length, "#FF9F0A"]].map(([label, num, color]) => (
+        {[ ["Toplam", meetings.length, STOIC_NAVY], ["Raporlanan", done.length, "#30D158"], ["Bekleyen", meetings.length - done.length, GOLD] ].map(([label, num, color]) => (
           <div key={label} style={S.stat(color)}><div style={{ fontSize: 30, fontWeight: 800 }}>{num}</div><div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div></div>
         ))}
       </div>
