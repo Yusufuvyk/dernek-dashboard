@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { db, auth } from "./firebase";
+import marcusLogo from "./assets/marcus-logo.svg";
 import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
   onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where
@@ -191,7 +192,10 @@ function LoginPage({ onLogin }) {
     <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 380, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
         <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.3, fontFamily: FONT_SERIF, color: "#181715" }}>Marcus</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, fontFamily: FONT_SERIF, color: "#181715" }}>
+            <img src={marcusLogo} alt="Marcus logo" style={{ width: 22, height: 22, objectFit: "contain" }} />
+            <span>Marcus</span>
+          </div>
           <div style={{ fontSize: 13, color: "#5E5A55", marginTop: 3 }}>Panele giris yapin</div>
         </div>
         <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
@@ -1397,7 +1401,10 @@ export default function App() {
     <div style={S.app}>
       <div style={S.sidebar}>
         <div style={{ padding: "16px 14px 14px", borderBottom: "1px solid #E4E7EC" }}>
-          <div style={{ fontSize: 17, fontWeight: 800, color: "#101828", letterSpacing: 1.2 }}>MARCUS</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 17, fontWeight: 800, color: "#101828", letterSpacing: 1.2 }}>
+            <img src={marcusLogo} alt="Marcus logo" style={{ width: 18, height: 18, objectFit: "contain" }} />
+            <span>MARCUS</span>
+          </div>
         </div>
         <nav style={S.nav}>
           {NAV_GROUPS.map(g => (
