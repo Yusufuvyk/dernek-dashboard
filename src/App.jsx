@@ -93,15 +93,15 @@ const GOLD = "#B98B2C";
 const FONT_SERIF = "'Cinzel','Cormorant Garamond','Times New Roman',serif";
 
 const S = {
-  app: { display: "flex", height: "100vh", fontFamily: "'Manrope','DM Sans','Segoe UI',sans-serif", background: "#FFFFFF", color: "#161513", overflow: "hidden" },
-  sidebar: { width: 260, background: "#0F0F10", borderRight: "1px solid #232326", display: "flex", flexDirection: "column", padding: "0 0 16px", flexShrink: 0 },
-  nav: { flex: 1, padding: "10px 10px", display: "flex", flexDirection: "column", gap: 2 },
-  navItem: a => ({ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 10, cursor: "pointer", color: a ? "#F7F7F5" : "#97958F", background: a ? "rgba(139,0,0,.22)" : "transparent", border: a ? `1px solid ${ROMA_RED}88` : "1px solid transparent", boxShadow: a ? `inset 2px 0 0 ${ROMA_RED}` : "none", fontSize: 13, fontWeight: a ? 700 : 500, userSelect: "none" }),
-  navSection: { fontSize: 10, fontWeight: 700, color: "#6F6D69", textTransform: "uppercase", letterSpacing: 1, padding: "13px 12px 5px" },
-  main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
-  topbar: { background: "#FFFFFF", borderBottom: "1px solid #E5E5E5", padding: "0 24px", height: 62, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
-  content: { flex: 1, overflow: "auto", padding: "20px" },
-  card: { background: "#FFFFFF", borderRadius: 14, padding: "18px 20px", border: "1px solid #E5E5E5", boxShadow: "0 3px 10px rgba(0,0,0,.03)" },
+  app: { display: "flex", height: "100vh", fontFamily: "'Manrope','DM Sans','Segoe UI',sans-serif", background: "#ECEDEF", color: "#171717", overflow: "hidden", padding: 10, boxSizing: "border-box" },
+  sidebar: { width: 210, background: "#F6F7F8", border: "1px solid #DFE2E6", borderRadius: 14, display: "flex", flexDirection: "column", padding: "0 0 12px", flexShrink: 0, boxShadow: "0 1px 2px rgba(16,24,40,.04)" },
+  nav: { flex: 1, padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 },
+  navItem: a => ({ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderRadius: 8, cursor: "pointer", color: a ? "#101828" : "#5D6673", background: a ? "#DDEBF8" : "transparent", border: a ? "1px solid #CFE2F5" : "1px solid transparent", fontSize: 12.5, fontWeight: a ? 700 : 600, userSelect: "none" }),
+  navSection: { fontSize: 10, fontWeight: 700, color: "#98A2B3", textTransform: "uppercase", letterSpacing: 1, padding: "12px 10px 4px" },
+  main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", marginLeft: 10, background: "#F3F4F6", border: "1px solid #DFE2E6", borderRadius: 18, boxShadow: "0 8px 24px rgba(16,24,40,.05)" },
+  topbar: { background: "transparent", borderBottom: "1px solid #E3E6EA", padding: "0 22px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
+  content: { flex: 1, overflow: "auto", padding: "16px" },
+  card: { background: "#FFFFFF", borderRadius: 12, padding: "16px 18px", border: "1px solid #E7E8EA", boxShadow: "0 1px 2px rgba(16,24,40,.04)" },
   cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85, fontFamily: FONT_SERIF },
   grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
   grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 },
@@ -122,8 +122,8 @@ const S = {
   textarea: { width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DADADA", fontSize: 13, outline: "none", resize: "vertical", boxSizing: "border-box", background: "#FFFFFF", minHeight: 72, fontFamily: "inherit" },
   formRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   table: { width: "100%", borderCollapse: "collapse" },
-  th: { textAlign: "left", padding: "9px 13px", fontSize: 11, fontWeight: 700, color: "#696762", textTransform: "uppercase", letterSpacing: 0.6, borderBottom: "1px solid #dfddd9" },
-  td: { padding: "12px 13px", fontSize: 13, borderBottom: "1px solid #eceae6", verticalAlign: "middle" },
+  th: { textAlign: "left", padding: "9px 13px", fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #ECEEF2" },
+  td: { padding: "12px 13px", fontSize: 12.5, borderBottom: "1px solid #F0F2F5", verticalAlign: "middle", color: "#1D2939" },
   badge: c => ({ display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: c + "22", color: c }),
   pb: { height: 5, background: "#EAEAEA", borderRadius: 4, overflow: "hidden" },
   pbF: p => ({ height: "100%", width: `${p}%`, background: p === 100 ? "#1F8F5F" : p < 30 ? ROMA_RED : GOLD, borderRadius: 4 }),
@@ -131,7 +131,7 @@ const S = {
   modal: { background: "#fff", borderRadius: 16, padding: 26, width: "100%", maxWidth: 540, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.22)" },
   flex: (g = 0) => ({ display: "flex", alignItems: "center", gap: g }),
   flexBetween: { display: "flex", alignItems: "center", justifyContent: "space-between" },
-  tag: { display: "inline-block", padding: "3px 8px", borderRadius: 6, fontSize: 11, background: "#FFFFFF", color: "#53504b", border: "1px solid #DADADA" },
+  tag: { display: "inline-block", padding: "3px 8px", borderRadius: 6, fontSize: 11, background: "#F8FAFC", color: "#475467", border: "1px solid #E4E7EC" },
   empty: { textAlign: "center", padding: "40px 0", color: "#7b7975", fontSize: 13 },
   avatar: (color = STOIC_NAVY) => ({ width: 32, height: 32, borderRadius: "50%", background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }),
 };
@@ -1396,8 +1396,8 @@ export default function App() {
   return (
     <div style={S.app}>
       <div style={S.sidebar}>
-        <div style={{ padding: "20px 16px 16px", borderBottom: "1px solid #242427" }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#F6F4EE", fontFamily: FONT_SERIF, letterSpacing: 0.6 }}>Marcus</div>
+        <div style={{ padding: "16px 14px 14px", borderBottom: "1px solid #E4E7EC" }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: "#101828", letterSpacing: 1.2 }}>MARCUS</div>
         </div>
         <nav style={S.nav}>
           {NAV_GROUPS.map(g => (
@@ -1407,19 +1407,19 @@ export default function App() {
                 <div key={n.id} style={S.navItem(page === n.id)} onClick={() => setPage(n.id)}>
                   <Icon name={n.icon} size={16} />
                   <span style={{ flex: 1 }}>{n.label}</span>
-                  {n.badge > 0 && <span style={{ background: ROMA_RED, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{n.badge}</span>}
+                  {n.badge > 0 && <span style={{ background: "#111827", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{n.badge}</span>}
                 </div>
               ))}
             </div>
           ))}
         </nav>
         <div style={{ padding: "0 8px" }}>
-          <div style={{ background: "rgba(255,255,255,.05)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,.1)" }}>
+          <div style={{ background: "#FFFFFF", borderRadius: 10, padding: "10px 12px", border: "1px solid #E4E7EC" }}>
             <div style={S.flex(8)}>
               <div style={{ ...S.avatar(avatarColor(currentUser.uid)), width: 28, height: 28, fontSize: 10 }}>{userProfile.avatar || userProfile.name?.[0]}</div>
-              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#F6F4EE" }}>{userProfile.name}</div><div style={{ fontSize: 10.5, color: "#B2AEA7" }}>{userProfile.role}</div></div>
+              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#101828" }}>{userProfile.name}</div><div style={{ fontSize: 10.5, color: "#667085" }}>{userProfile.role}</div></div>
             </div>
-            <button onClick={() => signOut(auth)} style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, color: "#E8D2A0", fontSize: 11.5, cursor: "pointer", background: "none", border: "none", padding: 0, fontWeight: 700, fontFamily: "inherit" }}>
+            <button onClick={() => signOut(auth)} style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, color: "#475467", fontSize: 11.5, cursor: "pointer", background: "none", border: "none", padding: 0, fontWeight: 700, fontFamily: "inherit" }}>
               <Icon name="logout" size={13} /> Çıkış Yap
             </button>
           </div>
@@ -1428,12 +1428,12 @@ export default function App() {
       <div style={S.main}>
         <div style={S.topbar}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 3, height: 24, borderRadius: 2, background: ROMA_RED }} />
+            <div style={{ width: 3, height: 24, borderRadius: 2, background: "#111827" }} />
             <div>
-              <div style={{ fontSize: 19, fontWeight: 700, fontFamily: FONT_SERIF, letterSpacing: 0.2, color: "#1B1A18", lineHeight: 1.1 }}>{TITLES[page]}</div>
+              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.6, color: "#101828", lineHeight: 1 }}>{TITLES[page]}</div>
             </div>
           </div>
-          <div style={{ fontSize: 12.5, color: "#8A8A8E" }}>{new Date().toLocaleDateString("tr-TR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
+          <div style={{ fontSize: 12.5, color: "#667085" }}>{new Date().toLocaleDateString("tr-TR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
         </div>
         <div style={S.content}>{renderPage()}</div>
       </div>
