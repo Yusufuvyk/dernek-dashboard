@@ -34,10 +34,21 @@ const normalizeRole = (role) => {
 };
 
 // ─ Role helpers (backward-compat: old "Admin"→"Başkan", old "Departman Üyesi"→manager, "Genel Üye"→member)
-const hasAdminRole = r => ["Admin", "Başkan"].includes(r);
+const roleKey = (role) => String(role || "")
+  .trim()
+  .toLowerCase()
+  .replace(/ı/g, "i")
+  .replace(/ğ/g, "g")
+  .replace(/ü/g, "u")
+  .replace(/ş/g, "s")
+  .replace(/ö/g, "o")
+  .replace(/ç/g, "c");
+
+const hasAdminRole = r => ["admin", "baskan", "yonetici"].includes(roleKey(r));
 const roleLevel = r => {
-  if (["Admin", "Başkan"].includes(r)) return 0;
-  if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return 1; // old "Departman Üyesi" = manager level
+  const key = roleKey(r);
+  if (["admin", "baskan", "yonetici"].includes(key)) return 0;
+  if (["departman yoneticisi", "departman uyesi"].includes(key)) return 1; // legacy: "Departman Üyesi" manager-level olabilir
   return 2; // "Üye", "Genel Üye" = regular member
 };
 const displayRole = r => {
