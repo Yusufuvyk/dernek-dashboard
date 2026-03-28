@@ -33,7 +33,7 @@ const normalizeRole = (role) => {
   return role;
 };
 
-// ─ Role helpers (backward-compat: old "Admin"→"Başkan", old "Departman Üyesi"→manager, "Genel Üye"→member)
+// ─ Role helpers
 const roleKey = (role) => String(role || "")
   .trim()
   .toLowerCase()
@@ -44,16 +44,26 @@ const roleKey = (role) => String(role || "")
   .replace(/ö/g, "o")
   .replace(/ç/g, "c");
 
-const hasAdminRole = r => ["admin", "baskan", "yonetici"].includes(roleKey(r));
+// Level 0: Başkan + Teknik Yönetici (tam yetki)
+// Level 1: Departman Yöneticisi (sadece kendi departmanı)
+// Level 2: Departman Üyesi / Üye (okuma)
+// Level 3: Denetmen (sadece denetim paneli)
+const hasSuperRole = r => ["admin", "baskan", "teknik yoneticisi"].includes(roleKey(r));
+const hasAdminRole = hasSuperRole; // backward-compat alias
 const roleLevel = r => {
   const key = roleKey(r);
-  if (["admin", "baskan", "yonetici"].includes(key)) return 0;
-  if (["departman yoneticisi", "departman uyesi"].includes(key)) return 1; // legacy: "Departman Üyesi" manager-level olabilir
-  return 2; // "Üye", "Genel Üye" = regular member
+  if (["admin", "baskan", "teknik yoneticisi"].includes(key)) return 0;
+  if (key === "departman yoneticisi") return 1;
+  if (key === "denetmen") return 3;
+  return 2; // Üye, Departman Üyesi
 };
+const isDenetmenRole = r => roleKey(r) === "denetmen";
 const displayRole = r => {
-  if (hasAdminRole(r)) return "Başkan";
-  if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return "Departman Yöneticisi";
+  const key = roleKey(r);
+  if (key === "teknik yoneticisi") return "Teknik Yönetici";
+  if (hasSuperRole(r)) return "Başkan";
+  if (key === "departman yoneticisi") return "Departman Yöneticisi";
+  if (key === "denetmen") return "Denetmen";
   return "Departman Üyesi";
 };
 
@@ -114,7 +124,7 @@ const S = {
   topbar: { background: "transparent", borderBottom: "1px solid #E3E6EA", padding: "0 22px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
   content: { flex: 1, overflow: "auto", padding: "16px" },
   card: { background: "#FFFFFF", borderRadius: 12, padding: "16px 18px", border: "1px solid #E7E8EA", boxShadow: "0 1px 2px rgba(16,24,40,.04)" },
-  cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85, fontFamily: FONT_SERIF },
+  cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85 },
   grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
   grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 },
   grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 },
@@ -203,7 +213,7 @@ function LoginPage({ onLogin }) {
     <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 380, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
         <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, fontFamily: FONT_SERIF, color: "#181715" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, color: "#181715" }}>
             <img src={marcusLogo} alt="Marcus logo" style={{ width: 34, height: 34, objectFit: "contain" }} />
             <span>Marcus</span>
           </div>
@@ -303,9 +313,14 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   const [fStatus, setFStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
+  const [delayModal, setDelayModal] = useState(null);
+
+  const rLevel = roleLevel(userProfile?.role);
+  const canManage = rLevel <= 1; // Başkan, Teknik Yönetici, Dept Yöneticisi
+  const canCreate = hasSuperRole(userProfile?.role) || rLevel === 1;
 
   const visible = useMemo(() => {
-    let list = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => {
+    let list = hasSuperRole(userProfile?.role) ? tasks : tasks.filter(t => {
       const arr = Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo];
       return t.deptId === userProfile?.deptId || arr.includes(currentUser?.uid);
     });
@@ -317,17 +332,24 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
 
   const save = async t => {
     if (modal.mode === "add") {
-      await addDoc(collection(db, "tasks"), { ...t, createdAt: serverTimestamp() });
+      await addDoc(collection(db, "tasks"), { ...t, createdAt: serverTimestamp(), status: "devam" });
     } else {
-      await updateDoc(doc(db, "tasks", t.id), t);
+      // In edit mode, preserve original dates and status
+      const { startDate, endDate, status, mazeretGecikme, ...rest } = t;
+      await updateDoc(doc(db, "tasks", t.id), rest);
     }
     setModal(null);
   };
   const del = async id => { await deleteDoc(doc(db, "tasks", id)); };
+  const finishTask = async id => { await updateDoc(doc(db, "tasks", id), { status: "yapıldı" }); };
   const approveTask = async id => { await updateDoc(doc(db, "tasks", id), { status: "tamamlandı" }); };
+  const saveDelay = async (id, mazeret) => {
+    await updateDoc(doc(db, "tasks", id), { status: "gecikmeli", mazeretGecikme: mazeret, mazeretTarih: today() });
+    setDelayModal(null);
+  };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
-  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: today(), endDate: "", notes: "", status: "planlandı" };
+  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: new Date().toISOString().slice(0, 16), endDate: "", notes: "" };
 
   return (
     <div>
@@ -340,14 +362,12 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
           </select>
           <select style={{ ...S.select, width: 145 }} value={fStatus} onChange={e => setFStatus(e.target.value)}>
             <option value="all">Tüm Durumlar</option>
-            <option value="planlandı">Planlandı</option>
             <option value="devam">Devam Ediyor</option>
-            <option value="yapıldı">Yapıldı (Onay Bekliyor)</option>
             <option value="tamamlandı">Tamamlandı</option>
             <option value="gecikmeli">Gecikmeli</option>
           </select>
         </div>
-        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
+        {canCreate && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -362,8 +382,16 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
                   <td style={S.td}>{fmtDate(t.endDate)}</td>
                   <td style={S.td}><span style={S.badge(STATUS[t.status]?.color || "#999")}>{STATUS[t.status]?.label}</span></td>
                   <td style={S.td}><div style={S.flex(5)}>
-                    {t.status === "yapıldı" && hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("green"), padding: "4px 8px", fontSize: 12 }} onClick={() => approveTask(t.id)}><Icon name="check" size={13} /> Onayla</button>}
-                    <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>
+                    {t.status === "devam" && t.endDate && today() >= t.endDate.slice(0, 10) && canManage && (
+                      <>
+                        <button style={{ ...S.btn("green"), padding: "4px 8px", fontSize: 12 }} onClick={() => finishTask(t.id)}><Icon name="check" size={13} /> Bitir</button>
+                        <button style={{ ...S.btn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={() => setDelayModal(t)}>Gecikme</button>
+                      </>
+                    )}
+                    {t.status === "yapıldı" && hasAdminRole(userProfile?.role) && (
+                      <button style={{ ...S.btn("green"), padding: "4px 8px", fontSize: 12 }} onClick={() => approveTask(t.id)}><Icon name="check" size={13} /> Onayla</button>
+                    )}
+                    {canManage && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>}
                     {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(t.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
                 </tr>
@@ -371,15 +399,21 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
           </tbody>
         </table>
       </div>
-      {modal && <TaskModal {...modal} depts={depts} users={users} onSave={save} onClose={() => setModal(null)} />}
+      {modal && <TaskModal {...modal} depts={depts} users={users} userProfile={userProfile} onSave={save} onClose={() => setModal(null)} />}
+      {delayModal && <TaskDelayModal task={delayModal} onSave={saveDelay} onClose={() => setDelayModal(null)} />}
     </div>
   );
 }
 
-function TaskModal({ mode, task, depts, users, onSave, onClose }) {
+function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(task);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-  
+  const isEdit = mode === "edit";
+  // Dept Yöneticisi sadece kendi departmanını görebilir
+  const visibleDepts = hasSuperRole(userProfile?.role)
+    ? depts
+    : depts.filter(d => d.id === userProfile?.deptId);
+
   const toggleUser = (id) => {
     const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
     const updated = arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id];
@@ -387,15 +421,12 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
   };
 
   return (
-    <Modal title={mode === "add" ? "Yeni Görev" : "Görevi Düzenle"} onClose={onClose}>
+    <Modal title={isEdit ? "Görevi Düzenle" : "Yeni Görev"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div><label style={S.label}>Açıklama</label><textarea style={S.textarea} value={f.desc} onChange={e => set("desc", e.target.value)} /></div>
-        
-        <div style={S.formRow}>
-          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)}>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-          <div><label style={S.label}>Durum</label><select style={S.select} value={f.status} onChange={e => set("status", e.target.value)}><option value="planlandı">Planlandı</option><option value="devam">Devam Ediyor</option><option value="yapıldı">Yapıldı (Onay Bekliyor)</option><option value="tamamlandı">Tamamlandı</option><option value="gecikmeli">Gecikmeli</option></select></div>
-        </div>
+
+        <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
 
         <div>
           <label style={S.label}>Atananlar</label>
@@ -413,10 +444,17 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
         </div>
 
         <div style={S.formRow}>
-          <div><label style={S.label}>Başlangıç</label><input type="date" style={S.input} value={f.startDate} onChange={e => set("startDate", e.target.value)} /></div>
-          <div><label style={S.label}>Bitiş</label><input type="date" style={S.input} value={f.endDate} onChange={e => set("endDate", e.target.value)} /></div>
+          <div>
+            <label style={S.label}>Başlangıç</label>
+            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.startDate} onChange={e => !isEdit && set("startDate", e.target.value)} readOnly={isEdit} />
+          </div>
+          <div>
+            <label style={S.label}>Bitiş</label>
+            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.endDate} onChange={e => !isEdit && set("endDate", e.target.value)} readOnly={isEdit} />
+          </div>
         </div>
-        
+        {isEdit && <div style={{ fontSize: 11.5, color: "#8A8A8E", marginTop: -6 }}>Tarihler oluşturulduktan sonra değiştirilemez.</div>}
+
         <div><label style={S.label}>Notlar</label><textarea style={S.textarea} value={f.notes} onChange={e => set("notes", e.target.value)} /></div>
         <div style={{ ...S.flex(10), justifyContent: "flex-end" }}>
           <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
@@ -427,13 +465,32 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
   );
 }
 
+function TaskDelayModal({ task, onSave, onClose }) {
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="Gecikme Mazereti" onClose={onClose}>
+      <div style={{ marginBottom: 10, fontSize: 13, color: "#4F4D49" }}>
+        <strong>{task.title}</strong> görevi gecikti. Mazereti girin:
+      </div>
+      <textarea style={S.textarea} value={reason} onChange={e => setReason(e.target.value)} placeholder="Gecikme nedeni…" />
+      <div style={{ ...S.flex(10), justifyContent: "flex-end", marginTop: 14 }}>
+        <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
+        <button style={S.btn("danger")} onClick={() => onSave(task.id, reason)} disabled={!reason.trim()}>Kaydet</button>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── MEETINGS ─────────────────────────────────────────────────────────────────
 function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
   const [reportModal, setReportModal] = useState(null);
   const [excuseModal, setExcuseModal] = useState(null);
-  const visible = hasAdminRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
-  const emptyM = { title: "", deptId: depts[0]?.id || "", datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
+  const mRLevel = roleLevel(userProfile?.role);
+  const canCreateMeeting = hasSuperRole(userProfile?.role) || mRLevel === 1;
+  const visible = hasSuperRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
+  const defaultDeptId = hasSuperRole(userProfile?.role) ? (depts[0]?.id || "") : (userProfile?.deptId || depts[0]?.id || "");
+  const emptyM = { title: "", deptId: defaultDeptId, datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
 
   const save = async m => {
     if (modal.mode === "add") await addDoc(collection(db, "meetings"), { ...m, createdAt: serverTimestamp() });
@@ -491,7 +548,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 14 }}>
         <div />
-        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
+        {canCreateMeeting && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -518,7 +575,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
           </tbody>
         </table>
       </div>
-      {modal && <MeetingModal {...modal} depts={depts} users={users} onSave={save} onClose={() => setModal(null)} />}
+      {modal && <MeetingModal {...modal} depts={depts} users={users} userProfile={userProfile} onSave={save} onClose={() => setModal(null)} />}
       {reportModal && <ReportModal meeting={reportModal} users={users} depts={depts} onSave={saveReport} onClose={() => setReportModal(null)} />}
       {excuseModal && <ExcuseModal meeting={excuseModal} onSave={saveExcuse} onClose={() => setExcuseModal(null)} />}
     </div>
@@ -541,16 +598,19 @@ function ExcuseModal({ meeting, onSave, onClose }) {
   );
 }
 
-function MeetingModal({ mode, meeting, depts, users, onSave, onClose }) {
+function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(meeting);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const toggleP = id => set("participants", f.participants.includes(id) ? f.participants.filter(x => x !== id) : [...f.participants, id]);
+  const visibleDepts = hasSuperRole(userProfile?.role)
+    ? depts
+    : depts.filter(d => d.id === userProfile?.deptId);
   return (
     <Modal title={mode === "add" ? "Yeni Toplantı" : "Toplantı Düzenle"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div style={S.formRow}>
-          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)}>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           <div><label style={S.label}>Tarih & Saat</label><input type="datetime-local" style={S.input} value={f.datetime} onChange={e => set("datetime", e.target.value)} /></div>
         </div>
         <div><label style={S.label}>Katılımcılar</label>
@@ -728,7 +788,7 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
   const [err, setErr] = useState("");
   if (!hasAdminRole(userProfile?.role)) return <div style={S.card}><div style={S.empty}>Başkan yetkisi gereklidir.</div></div>;
 
-  const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158" };
+  const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Teknik Yönetici": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158", "Denetmen": GOLD };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
   const createUser = async () => {
@@ -793,7 +853,7 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
             <div><label style={S.label}>Şifre</label><input type="password" style={S.input} value={modal.user.password} onChange={e => setModal(p => ({ ...p, user: { ...p.user, password: e.target.value } }))} /></div>
           </>}
           <div style={S.formRow}>
-            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option><option value="Denetmen">Denetmen</option></select></div>
+            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Teknik Yönetici">Teknik Yönetici</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option><option value="Denetmen">Denetmen</option></select></div>
             <div><label style={S.label}>Departman</label><select style={S.select} value={modal.user.deptId || ""} onChange={e => setModal(p => ({ ...p, user: { ...p.user, deptId: e.target.value || null } }))}><option value="">—</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
           {err && <div style={{ color: "#6A5610", fontSize: 12 }}>{err}</div>}
@@ -1426,29 +1486,57 @@ export default function App() {
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
   if (!userProfile) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Profil yukleniyor...</div>;
 
-  const isDenetmen = roleKey(userProfile?.role) === "denetmen";
-  const canAudit = hasAdminRole(userProfile?.role) || isDenetmen;
-  const NAV_GROUPS = [
-    { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] },
-    { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
-    { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }] },
-    { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, ...(canAudit ? [{ id: "audit", label: "Denetim", icon: "reports" }] : [])] },
-  ];
+  const isDenetmen = isDenetmenRole(userProfile?.role);
+  const canAudit = hasSuperRole(userProfile?.role) || isDenetmen;
+  const rLevel = roleLevel(userProfile?.role);
+
+  // Nav grupları role göre filtrelenir
+  const NAV_GROUPS = (() => {
+    if (isDenetmen) {
+      // Denetmen: sadece Denetim paneli
+      return [{ label: "Denetim", items: [{ id: "audit", label: "Denetim", icon: "reports" }] }];
+    }
+    const genel = { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] };
+    const iletisim = { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }] };
+    if (rLevel === 0) {
+      // Başkan / Teknik Yönetici: tam erişim
+      return [
+        genel,
+        { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
+        iletisim,
+        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, { id: "audit", label: "Denetim", icon: "reports" }] },
+      ];
+    }
+    if (rLevel === 1) {
+      // Departman Yöneticisi: kendi departmanı kapsamında
+      return [
+        genel,
+        { label: "Organizasyon", items: [{ id: "departments", label: "Departmanlar", icon: "users" }] },
+        iletisim,
+        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
+      ];
+    }
+    // Departman Üyesi
+    return [genel, iletisim];
+  })();
   const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli" };
   const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile };
 
+  const noAccess = <div style={S.card}><div style={S.empty}>Bu sayfaya erişim yetkiniz yok.</div></div>;
   const renderPage = () => {
+    // Denetmen sadece audit sayfasına erişebilir
+    if (isDenetmen && page !== "audit") return noAccess;
     switch (page) {
       case "dashboard": return <Dashboard {...props} />;
       case "tasks": return <TasksPage {...props} />;
       case "meetings": return <MeetingsPage {...props} />;
       case "attendance": return <AttendancePage {...props} />;
-      case "orgtree": return <OrgTreePage {...props} />;
+      case "orgtree": return hasSuperRole(userProfile?.role) ? <OrgTreePage {...props} /> : noAccess;
       case "departments": return <DepartmentsPage {...props} />;
-      case "userlist": return <UsersPage {...props} />;
+      case "userlist": return hasSuperRole(userProfile?.role) ? <UsersPage {...props} /> : noAccess;
       case "messages": return <MessagesPage {...props} />;
       case "reports": return <ReportsPage {...props} />;
-      case "audit": return <AuditPage {...props} />;
+      case "audit": return canAudit ? <AuditPage {...props} /> : noAccess;
       default: return null;
     }
   };
@@ -1571,7 +1659,7 @@ function AuditPage({ attendance, tasks, users, depts }) {
           <div style={S.empty}>Gecikmeli görev yok</div>
         ) : (
           <table style={S.table}>
-            <thead><tr>{["Görev", "Departman", "Bitiş Tarihi", "Atananlar"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Görev", "Departman", "Bitiş Tarihi", "Atananlar", "Mazeret"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>
               {delayedTasks.map(t => (
                 <tr key={t.id}>
@@ -1579,6 +1667,10 @@ function AuditPage({ attendance, tasks, users, depts }) {
                   <td style={S.td}><span style={S.tag}>{getDept(t.deptId)}</span></td>
                   <td style={S.td}><span style={{ color: ROMA_RED, fontWeight: 600 }}>{fmtDate(t.endDate)}</span></td>
                   <td style={S.td}><div style={{ ...S.flex(4), flexWrap: "wrap" }}>{(Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo]).filter(Boolean).map(id => <span key={id} style={S.tag}>{getName(id)}</span>)}</div></td>
+                  <td style={{ ...S.td, maxWidth: 200, color: t.mazeretGecikme ? "#636366" : ROMA_RED, fontStyle: t.mazeretGecikme ? "italic" : "normal" }}>
+                    {t.mazeretGecikme || <span style={{ fontWeight: 600 }}>Mazeret girilmedi</span>}
+                    {t.mazeretTarih && <div style={{ fontSize: 10.5, color: "#8A8A8E" }}>{fmtDate(t.mazeretTarih)}</div>}
+                  </td>
                 </tr>
               ))}
             </tbody>
