@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { db, auth } from "./firebase";
 import marcusLogo from "./assets/marcus-logo.svg";
 import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
-  onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where
+  onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where, getDoc
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword,
@@ -33,7 +33,7 @@ const normalizeRole = (role) => {
   return role;
 };
 
-// ─ Role helpers (backward-compat: old "Admin"→"Başkan", old "Departman Üyesi"→manager, "Genel Üye"→member)
+// ─ Role helpers
 const roleKey = (role) => String(role || "")
   .trim()
   .toLowerCase()
@@ -44,21 +44,31 @@ const roleKey = (role) => String(role || "")
   .replace(/ö/g, "o")
   .replace(/ç/g, "c");
 
-const hasAdminRole = r => ["admin", "baskan", "yonetici"].includes(roleKey(r));
+// Level 0: Başkan + Teknik Yönetici (tam yetki)
+// Level 1: Departman Yöneticisi (sadece kendi departmanı)
+// Level 2: Departman Üyesi / Üye (okuma)
+// Level 3: Denetmen (sadece denetim paneli)
+const hasSuperRole = r => ["admin", "baskan", "teknik yoneticisi"].includes(roleKey(r));
+const hasAdminRole = hasSuperRole; // backward-compat alias
 const roleLevel = r => {
   const key = roleKey(r);
-  if (["admin", "baskan", "yonetici"].includes(key)) return 0;
-  if (["departman yoneticisi", "departman uyesi"].includes(key)) return 1; // legacy: "Departman Üyesi" manager-level olabilir
-  return 2; // "Üye", "Genel Üye" = regular member
+  if (["admin", "baskan", "teknik yoneticisi"].includes(key)) return 0;
+  if (key === "departman yoneticisi") return 1;
+  if (key === "denetmen") return 3;
+  return 2; // Üye, Departman Üyesi
 };
+const isDenetmenRole = r => roleKey(r) === "denetmen";
 const displayRole = r => {
-  if (hasAdminRole(r)) return "Başkan";
-  if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return "Departman Yöneticisi";
+  const key = roleKey(r);
+  if (key === "teknik yoneticisi") return "Teknik Yönetici";
+  if (hasSuperRole(r)) return "Başkan";
+  if (key === "departman yoneticisi") return "Departman Yöneticisi";
+  if (key === "denetmen") return "Denetmen";
   return "Departman Üyesi";
 };
 
 const openPrintableReport = ({ title, bodyHtml }) => {
-  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;white-space:pre-wrap;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
+  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;line-height:1.7;}ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const popup = window.open(url, "_blank", "noopener,noreferrer");
@@ -114,7 +124,7 @@ const S = {
   topbar: { background: "transparent", borderBottom: "1px solid #E3E6EA", padding: "0 22px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 },
   content: { flex: 1, overflow: "auto", padding: "16px" },
   card: { background: "#FFFFFF", borderRadius: 12, padding: "16px 18px", border: "1px solid #E7E8EA", boxShadow: "0 1px 2px rgba(16,24,40,.04)" },
-  cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85, fontFamily: FONT_SERIF },
+  cardTitle: { fontSize: 11, fontWeight: 800, color: "#2A2927", marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.85 },
   grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
   grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 },
   grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 },
@@ -180,44 +190,140 @@ function Modal({ title, onClose, children }) {
   );
 }
 
+// ─── RICH TEXT EDITOR ────────────────────────────────────────────────────────
+function RichTextEditor({ value, onChange, minHeight = 90, readOnly = false }) {
+  const ref = useRef(null);
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (ref.current && !initialized.current) {
+      ref.current.innerHTML = value || "";
+      initialized.current = true;
+    }
+  }, []);
+
+  const exec = (cmd) => {
+    ref.current?.focus();
+    document.execCommand(cmd, false, null);
+    onChange(ref.current?.innerHTML || "");
+  };
+
+  const toolbarBtn = (label, cmd, title) => (
+    <button key={cmd} type="button" title={title} onMouseDown={e => { e.preventDefault(); exec(cmd); }}
+      style={{ padding: "3px 9px", borderRadius: 6, border: "1px solid #DADADA", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1D2939" }}
+    >{label}</button>
+  );
+
+  return (
+    <div style={{ border: "1px solid #DADADA", borderRadius: 10, overflow: "hidden", background: readOnly ? "#F9F9F9" : "#fff" }}>
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 5, padding: "6px 8px", borderBottom: "1px solid #EAEAEA", background: "#F9FAFB" }}>
+          {toolbarBtn("B", "bold", "Kalın")}
+          {toolbarBtn("İ", "italic", "İtalik")}
+          {toolbarBtn("• Liste", "insertUnorderedList", "Madde işaretli liste")}
+          {toolbarBtn("1. Liste", "insertOrderedList", "Numaralı liste")}
+        </div>
+      )}
+      <div ref={ref} contentEditable={!readOnly} suppressContentEditableWarning
+        onInput={e => !readOnly && onChange(e.currentTarget.innerHTML)}
+        style={{ padding: "9px 12px", minHeight, outline: "none", fontSize: 13, lineHeight: 1.75, fontFamily: "inherit", background: readOnly ? "#F9F9F9" : "#fff" }}
+      />
+    </div>
+  );
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
+  const [tab, setTab] = useState("login");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handle = async () => {
-    setLoading(true);
-    setErr("");
+  const [reg, setReg] = useState({ name: "", email: "", pass: "", title: "", dept: "" });
+  const setF = (k, v) => setReg(p => ({ ...p, [k]: v }));
+  const [regDone, setRegDone] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true); setErr("");
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
       onLogin(cred.user);
-    } catch (e) {
-      setErr("E-posta veya şifre hatalı.");
-    }
+    } catch { setErr("E-posta veya şifre hatalı."); }
     setLoading(false);
   };
 
+  const handleRegister = async () => {
+    if (!reg.name.trim() || !reg.email.trim() || !reg.pass.trim()) { setErr("Ad, e-posta ve şifre zorunludur."); return; }
+    if (reg.pass.length < 6) { setErr("Şifre en az 6 karakter olmalıdır."); return; }
+    setLoading(true); setErr("");
+    try {
+      const existing = await getDocs(query(collection(db, "registrations"), where("email", "==", reg.email.trim().toLowerCase()), limit(1)));
+      if (!existing.empty) { setErr("Bu e-posta ile zaten bir kayıt talebi mevcut."); setLoading(false); return; }
+      await addDoc(collection(db, "registrations"), {
+        name: reg.name.trim(), email: reg.email.trim().toLowerCase(),
+        password: reg.pass, title: reg.title.trim(), desiredDept: reg.dept.trim(),
+        status: "bekliyor", createdAt: new Date().toISOString(),
+      });
+      setRegDone(true);
+    } catch (e) { setErr("Kayıt talebi gönderilemedi: " + e.message); }
+    setLoading(false);
+  };
+
+  const tabBtn = (id, label) => (
+    <button onClick={() => { setTab(id); setErr(""); }}
+      style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, fontFamily: "inherit", background: tab === id ? "#111827" : "transparent", color: tab === id ? "#fff" : "#667085" }}
+    >{label}</button>
+  );
+
   return (
     <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 380, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, fontFamily: FONT_SERIF, color: "#181715" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 420, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, color: "#181715" }}>
             <img src={marcusLogo} alt="Marcus logo" style={{ width: 34, height: 34, objectFit: "contain" }} />
             <span>Marcus</span>
           </div>
-          <div style={{ fontSize: 13, color: "#5E5A55", marginTop: 3 }}>Panele giris yapin</div>
         </div>
-        <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
-        <div style={{ marginBottom: 18 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
-        {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
-        <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handle} disabled={loading}>
-          {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
-        </button>
-        <div style={{ marginTop: 16, fontSize: 12, color: "#8A8A8E", textAlign: "center" }}>
-          Hesabınız yoksa Admin size oluşturur.
+        <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 10, padding: 3, marginBottom: 22 }}>
+          {tabBtn("login", "Giriş Yap")}
+          {tabBtn("register", "Kayıt Ol")}
         </div>
+
+        {tab === "login" ? (
+          <>
+            <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
+            <div style={{ marginBottom: 18 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handleLogin} disabled={loading}>
+              {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
+            </button>
+          </>
+        ) : regDone ? (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>✓</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Talebiniz alındı!</div>
+            <div style={{ fontSize: 13, color: "#667085", lineHeight: 1.7 }}>Kayıt talebiniz admin onayına gönderildi.<br />Onaylandıktan sonra giriş yapabilirsiniz.</div>
+            <button style={{ ...S.btn("ghost"), marginTop: 18 }} onClick={() => { setTab("login"); setRegDone(false); setReg({ name: "", email: "", pass: "", title: "", dept: "" }); }}>Giriş sayfasına dön</button>
+          </div>
+        ) : (
+          <>
+            <div style={S.formRow}>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>Ad Soyad</label><input style={S.input} value={reg.name} onChange={e => setF("name", e.target.value)} /></div>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>Unvan / Görev</label><input style={S.input} value={reg.title} onChange={e => setF("title", e.target.value)} placeholder="ör. Muhasebe Uzmanı" /></div>
+            </div>
+            <div style={{ marginBottom: 11 }}><label style={S.label}>Departman</label><input style={S.input} value={reg.dept} onChange={e => setF("dept", e.target.value)} placeholder="ör. Finans, Operasyon…" /></div>
+            <div style={S.formRow}>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={reg.email} onChange={e => setF("email", e.target.value)} /></div>
+              <div style={{ marginBottom: 16 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={reg.pass} onChange={e => setF("pass", e.target.value)} /></div>
+            </div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handleRegister} disabled={loading}>
+              {loading ? "Gönderiliyor…" : "Kayıt Talebi Gönder"}
+            </button>
+            <div style={{ marginTop: 12, fontSize: 12, color: "#8A8A8E", textAlign: "center" }}>Talebiniz admin tarafından incelenerek onaylanacaktır.</div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -303,9 +409,14 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   const [fStatus, setFStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
+  const [delayModal, setDelayModal] = useState(null);
+
+  const rLevel = roleLevel(userProfile?.role);
+  const canManage = rLevel <= 1; // Başkan, Teknik Yönetici, Dept Yöneticisi
+  const canCreate = hasSuperRole(userProfile?.role) || rLevel === 1;
 
   const visible = useMemo(() => {
-    let list = hasAdminRole(userProfile?.role) ? tasks : tasks.filter(t => {
+    let list = hasSuperRole(userProfile?.role) ? tasks : tasks.filter(t => {
       const arr = Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo];
       return t.deptId === userProfile?.deptId || arr.includes(currentUser?.uid);
     });
@@ -317,16 +428,24 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
 
   const save = async t => {
     if (modal.mode === "add") {
-      await addDoc(collection(db, "tasks"), { ...t, createdAt: serverTimestamp() });
+      await addDoc(collection(db, "tasks"), { ...t, createdAt: serverTimestamp(), status: "devam" });
     } else {
-      await updateDoc(doc(db, "tasks", t.id), t);
+      // In edit mode, preserve original dates and status
+      const { startDate, endDate, status, mazeretGecikme, ...rest } = t;
+      await updateDoc(doc(db, "tasks", t.id), rest);
     }
     setModal(null);
   };
   const del = async id => { await deleteDoc(doc(db, "tasks", id)); };
+  const finishTask = async id => { await updateDoc(doc(db, "tasks", id), { status: "yapıldı" }); };
+  const approveTask = async id => { await updateDoc(doc(db, "tasks", id), { status: "tamamlandı" }); };
+  const saveDelay = async (id, mazeret) => {
+    await updateDoc(doc(db, "tasks", id), { status: "gecikmeli", mazeretGecikme: mazeret, mazeretTarih: today() });
+    setDelayModal(null);
+  };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
-  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: today(), endDate: "", notes: "", status: "devam" };
+  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: new Date().toISOString().slice(0, 16), endDate: "", notes: "" };
 
   return (
     <div>
@@ -344,7 +463,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
             <option value="gecikmeli">Gecikmeli</option>
           </select>
         </div>
-        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
+        {canCreate && <button style={S.btn()} onClick={() => setModal({ mode: "add", task: emptyTask })}><Icon name="plus" size={15} /> Görev Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -359,7 +478,16 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
                   <td style={S.td}>{fmtDate(t.endDate)}</td>
                   <td style={S.td}><span style={S.badge(STATUS[t.status]?.color || "#999")}>{STATUS[t.status]?.label}</span></td>
                   <td style={S.td}><div style={S.flex(5)}>
-                    <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>
+                    {t.status === "devam" && t.endDate && today() >= t.endDate.slice(0, 10) && canManage && (
+                      <>
+                        <button style={{ ...S.btn("green"), padding: "4px 8px", fontSize: 12 }} onClick={() => finishTask(t.id)}><Icon name="check" size={13} /> Bitir</button>
+                        <button style={{ ...S.btn("danger"), padding: "4px 8px", fontSize: 12 }} onClick={() => setDelayModal(t)}>Gecikme</button>
+                      </>
+                    )}
+                    {t.status === "yapıldı" && hasAdminRole(userProfile?.role) && (
+                      <button style={{ ...S.btn("green"), padding: "4px 8px", fontSize: 12 }} onClick={() => approveTask(t.id)}><Icon name="check" size={13} /> Onayla</button>
+                    )}
+                    {canManage && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", task: { ...t } })}><Icon name="edit" size={13} /></button>}
                     {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(t.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
                 </tr>
@@ -367,15 +495,21 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
           </tbody>
         </table>
       </div>
-      {modal && <TaskModal {...modal} depts={depts} users={users} onSave={save} onClose={() => setModal(null)} />}
+      {modal && <TaskModal {...modal} depts={depts} users={users} userProfile={userProfile} onSave={save} onClose={() => setModal(null)} />}
+      {delayModal && <TaskDelayModal task={delayModal} onSave={saveDelay} onClose={() => setDelayModal(null)} />}
     </div>
   );
 }
 
-function TaskModal({ mode, task, depts, users, onSave, onClose }) {
+function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(task);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-  
+  const isEdit = mode === "edit";
+  // Dept Yöneticisi sadece kendi departmanını görebilir
+  const visibleDepts = hasSuperRole(userProfile?.role)
+    ? depts
+    : depts.filter(d => d.id === userProfile?.deptId);
+
   const toggleUser = (id) => {
     const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
     const updated = arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id];
@@ -383,15 +517,12 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
   };
 
   return (
-    <Modal title={mode === "add" ? "Yeni Görev" : "Görevi Düzenle"} onClose={onClose}>
+    <Modal title={isEdit ? "Görevi Düzenle" : "Yeni Görev"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div><label style={S.label}>Açıklama</label><textarea style={S.textarea} value={f.desc} onChange={e => set("desc", e.target.value)} /></div>
-        
-        <div style={S.formRow}>
-          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)}>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-          <div><label style={S.label}>Durum</label><select style={S.select} value={f.status} onChange={e => set("status", e.target.value)}><option value="devam">Devam Ediyor</option><option value="tamamlandı">Tamamlandı</option><option value="gecikmeli">Gecikmeli</option></select></div>
-        </div>
+
+        <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
 
         <div>
           <label style={S.label}>Atananlar</label>
@@ -409,10 +540,17 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
         </div>
 
         <div style={S.formRow}>
-          <div><label style={S.label}>Başlangıç</label><input type="date" style={S.input} value={f.startDate} onChange={e => set("startDate", e.target.value)} /></div>
-          <div><label style={S.label}>Bitiş</label><input type="date" style={S.input} value={f.endDate} onChange={e => set("endDate", e.target.value)} /></div>
+          <div>
+            <label style={S.label}>Başlangıç</label>
+            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.startDate} onChange={e => !isEdit && set("startDate", e.target.value)} readOnly={isEdit} />
+          </div>
+          <div>
+            <label style={S.label}>Bitiş</label>
+            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.endDate} onChange={e => !isEdit && set("endDate", e.target.value)} readOnly={isEdit} />
+          </div>
         </div>
-        
+        {isEdit && <div style={{ fontSize: 11.5, color: "#8A8A8E", marginTop: -6 }}>Tarihler oluşturulduktan sonra değiştirilemez.</div>}
+
         <div><label style={S.label}>Notlar</label><textarea style={S.textarea} value={f.notes} onChange={e => set("notes", e.target.value)} /></div>
         <div style={{ ...S.flex(10), justifyContent: "flex-end" }}>
           <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
@@ -423,13 +561,32 @@ function TaskModal({ mode, task, depts, users, onSave, onClose }) {
   );
 }
 
+function TaskDelayModal({ task, onSave, onClose }) {
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="Gecikme Mazereti" onClose={onClose}>
+      <div style={{ marginBottom: 10, fontSize: 13, color: "#4F4D49" }}>
+        <strong>{task.title}</strong> görevi gecikti. Mazereti girin:
+      </div>
+      <textarea style={S.textarea} value={reason} onChange={e => setReason(e.target.value)} placeholder="Gecikme nedeni…" />
+      <div style={{ ...S.flex(10), justifyContent: "flex-end", marginTop: 14 }}>
+        <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
+        <button style={S.btn("danger")} onClick={() => onSave(task.id, reason)} disabled={!reason.trim()}>Kaydet</button>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── MEETINGS ─────────────────────────────────────────────────────────────────
 function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
   const [modal, setModal] = useState(null);
   const [reportModal, setReportModal] = useState(null);
   const [excuseModal, setExcuseModal] = useState(null);
-  const visible = hasAdminRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
-  const emptyM = { title: "", deptId: depts[0]?.id || "", datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
+  const mRLevel = roleLevel(userProfile?.role);
+  const canCreateMeeting = hasSuperRole(userProfile?.role) || mRLevel === 1;
+  const visible = hasSuperRole(userProfile?.role) ? meetings : meetings.filter(m => m.deptId === userProfile?.deptId || m.participants?.includes(currentUser?.uid));
+  const defaultDeptId = hasSuperRole(userProfile?.role) ? (depts[0]?.id || "") : (userProfile?.deptId || depts[0]?.id || "");
+  const emptyM = { title: "", deptId: defaultDeptId, datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
 
   const save = async m => {
     if (modal.mode === "add") await addDoc(collection(db, "meetings"), { ...m, createdAt: serverTimestamp() });
@@ -487,7 +644,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 14 }}>
         <div />
-        {roleLevel(userProfile?.role) <= 1 && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
+        {canCreateMeeting && <button style={S.btn()} onClick={() => setModal({ mode: "add", meeting: emptyM })}><Icon name="plus" size={15} /> Toplantı Ekle</button>}
       </div>
       <div style={S.card}>
         <table style={S.table}>
@@ -502,10 +659,11 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
                   <td style={S.td}><div style={{ ...S.flex(4), flexWrap: "wrap" }}>{(m.participants || []).slice(0, 3).map(id => <span key={id} style={S.tag}>{getName(id)}</span>)}</div></td>
                   <td style={S.td}><span style={S.badge(STATUS[m.status]?.color || "#999")}>{STATUS[m.status]?.label}</span></td>
                   <td style={S.td}><div style={S.flex(5)}>
-                    {m.status === "planlandı" && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", meeting: { ...m } })}><Icon name="edit" size={13} /></button>}
+                    {m.status === "planlandı" && roleLevel(userProfile?.role) <= 1 && <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", meeting: { ...m } })}><Icon name="edit" size={13} /></button>}
                     {m.status === "planlandı" && m.participants?.includes(currentUser?.uid) && !m.excuses?.[currentUser?.uid] && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: GOLD }} onClick={() => setExcuseModal(m)}>İzin Al</button>}
                     {m.status === "planlandı" && m.participants?.includes(currentUser?.uid) && m.excuses?.[currentUser?.uid] && <span style={{ fontSize: 11, color: GOLD, fontWeight: 600 }}>İzinli</span>}
-                    <button style={{ ...S.btn("green"), padding: "4px 11px", fontSize: 12 }} onClick={() => setReportModal(m)}><Icon name="reports" size={12} /> Rapor</button>
+                    {m.status === "planlandı" && roleLevel(userProfile?.role) <= 1 && <button style={{ ...S.btn("green"), padding: "4px 11px", fontSize: 12 }} onClick={() => setReportModal({ ...m, readOnly: false })}><Icon name="check" size={12} /> Onayla</button>}
+                    {m.status === "yapıldı" && <button style={{ ...S.btn("ghost"), padding: "4px 11px", fontSize: 12 }} onClick={() => setReportModal({ ...m, readOnly: true })}><Icon name="reports" size={12} /> Rapor</button>}
                     {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: "#6A5610" }} onClick={() => del(m.id)}><Icon name="trash" size={13} /></button>}
                   </div></td>
                 </tr>
@@ -513,7 +671,7 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
           </tbody>
         </table>
       </div>
-      {modal && <MeetingModal {...modal} depts={depts} users={users} onSave={save} onClose={() => setModal(null)} />}
+      {modal && <MeetingModal {...modal} depts={depts} users={users} userProfile={userProfile} onSave={save} onClose={() => setModal(null)} />}
       {reportModal && <ReportModal meeting={reportModal} users={users} depts={depts} onSave={saveReport} onClose={() => setReportModal(null)} />}
       {excuseModal && <ExcuseModal meeting={excuseModal} onSave={saveExcuse} onClose={() => setExcuseModal(null)} />}
     </div>
@@ -536,16 +694,19 @@ function ExcuseModal({ meeting, onSave, onClose }) {
   );
 }
 
-function MeetingModal({ mode, meeting, depts, users, onSave, onClose }) {
+function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(meeting);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const toggleP = id => set("participants", f.participants.includes(id) ? f.participants.filter(x => x !== id) : [...f.participants, id]);
+  const visibleDepts = hasSuperRole(userProfile?.role)
+    ? depts
+    : depts.filter(d => d.id === userProfile?.deptId);
   return (
     <Modal title={mode === "add" ? "Yeni Toplantı" : "Toplantı Düzenle"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div style={S.formRow}>
-          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)}>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+          <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           <div><label style={S.label}>Tarih & Saat</label><input type="datetime-local" style={S.input} value={f.datetime} onChange={e => set("datetime", e.target.value)} /></div>
         </div>
         <div><label style={S.label}>Katılımcılar</label>
@@ -563,6 +724,7 @@ function MeetingModal({ mode, meeting, depts, users, onSave, onClose }) {
 }
 
 function ReportModal({ meeting, users, depts, onSave, onClose }) {
+  const readOnly = meeting.readOnly === true;
   const [kararlar, setKararlar] = useState(meeting.report?.kararlar || "");
   const [aksiyonlar, setAksiyonlar] = useState(meeting.report?.aksiyonlar || "");
   const [attendedParticipantIds, setAttendedParticipantIds] = useState(
@@ -571,6 +733,7 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
   const getName = id => users.find(u => u.id === id)?.name || id;
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const toggleAttended = id => {
+    if (readOnly) return;
     setAttendedParticipantIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   };
   const printPdf = () => {
@@ -580,14 +743,15 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
     });
   };
   return (
-    <Modal title="Toplantı Raporu" onClose={onClose}>
+    <Modal title={readOnly ? "Toplantı Raporu (Onaylı)" : "Toplantıyı Onayla"} onClose={onClose}>
       <div style={{ background: "#FFFFFF", border: "1px solid #E5E5E5", borderRadius: 9, padding: "11px 14px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.9 }}>
         <div><strong>Toplantı:</strong> {meeting.title}</div>
         <div><strong>Tarih:</strong> {fmtDateTime(meeting.datetime)}</div>
+        {readOnly && <div style={{ marginTop: 4 }}><span style={{ ...S.badge("#30D158"), fontSize: 11 }}>Yapıldı ✓</span></div>}
       </div>
-      <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><textarea style={{ ...S.textarea, minHeight: 80 }} value={kararlar} onChange={e => setKararlar(e.target.value)} /></div>
+      <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><RichTextEditor value={kararlar} onChange={v => !readOnly && setKararlar(v)} minHeight={80} readOnly={readOnly} /></div>
       <div style={{ marginBottom: 12 }}>
-        <label style={S.label}>Katılanlar (otomatik devamsızlık için işaretleyin)</label>
+        <label style={S.label}>{readOnly ? "Katılanlar" : "Katılanlar (devamsızlık için işaretleyin)"}</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
           {(meeting.participants || []).map(id => {
             const active = attendedParticipantIds.includes(id);
@@ -600,7 +764,7 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
                     padding: "4px 11px",
                     borderRadius: 20,
                     fontSize: 12,
-                    cursor: "pointer",
+                    cursor: readOnly ? "default" : "pointer",
                     fontWeight: 600,
                     background: active ? "#1C1C1E" : "#FFFFFF",
                     color: active ? "#fff" : "#1C1C1E",
@@ -616,10 +780,13 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
           })}
         </div>
       </div>
-      <div style={{ marginBottom: 16 }}><label style={S.label}>Aksiyon Maddeleri</label><textarea style={{ ...S.textarea, minHeight: 80 }} value={aksiyonlar} onChange={e => setAksiyonlar(e.target.value)} /></div>
+      <div style={{ marginBottom: 16 }}><label style={S.label}>Aksiyon Maddeleri</label><RichTextEditor value={aksiyonlar} onChange={v => !readOnly && setAksiyonlar(v)} minHeight={80} readOnly={readOnly} /></div>
       <div style={{ ...S.flexBetween }}>
         <button style={S.btn("ghost")} onClick={printPdf}><Icon name="download" size={13} /> PDF</button>
-        <div style={S.flex(7)}><button style={S.btn("ghost")} onClick={onClose}>İptal</button><button style={S.btn()} onClick={() => onSave({ meetingId: meeting.id, report: { kararlar, aksiyonlar }, attendedParticipantIds })}>Kaydet</button></div>
+        <div style={S.flex(7)}>
+          <button style={S.btn("ghost")} onClick={onClose}>{readOnly ? "Kapat" : "İptal"}</button>
+          {!readOnly && <button style={S.btn()} onClick={() => onSave({ meetingId: meeting.id, report: { kararlar, aksiyonlar }, attendedParticipantIds })}>Onayla ve Kaydet</button>}
+        </div>
       </div>
     </Modal>
   );
@@ -628,7 +795,7 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
 // ─── DEPARTMENTS ──────────────────────────────────────────────────────────────
 function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
   const [modal, setModal] = useState(null);
-  const [expandedDept, setExpandedDept] = useState(null);
+  const [memberModal, setMemberModal] = useState(null);
   const isAdmin = hasAdminRole(userProfile?.role);
 
   const save = async d => {
@@ -650,10 +817,9 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
       <div style={S.grid3}>
         {depts.map(d => {
           const members = users.filter(u => u.deptId === d.id);
-          const isExp = expandedDept === d.id;
           return (
-            <div key={d.id} style={{ ...S.card, position: "relative", cursor: "pointer", border: isExp ? `1px solid ${STOIC_NAVY}` : "1px solid #E5E5E5" }}
-              onClick={() => setExpandedDept(isExp ? null : d.id)}>
+            <div key={d.id} style={{ ...S.card, position: "relative", cursor: "pointer", border: "1px solid #E5E5E5", transition: "border-color 0.15s" }}
+              onClick={() => setMemberModal(d)}>
               <div style={{ position: "absolute", top: 12, right: 12, ...S.flex(5) }} onClick={e => e.stopPropagation()}>
                 {isAdmin && <>
                   <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", dept: { ...d } })}><Icon name="edit" size={13} /></button>
@@ -671,28 +837,35 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
                     </div>
                   ))}
                 </div>
-                <div style={{ fontSize: 11, color: isExp ? STOIC_NAVY : "#8A8A8E", fontWeight: 600 }}>{isExp ? "▲ Kapat" : "▼ Üyeler"}</div>
+                <div style={{ fontSize: 11, color: "#8A8A8E", fontWeight: 600 }}>▼ Üyeler</div>
               </div>
-              {isExp && (
-                <div style={{ borderTop: "1px solid #E5E5E5", marginTop: 14, paddingTop: 12 }} onClick={e => e.stopPropagation()}>
-                  {members.length === 0 ? (
-                    <div style={{ ...S.empty, padding: "10px 0" }}>Bu departmanda üye yok</div>
-                  ) : members.map(u => (
-                    <div key={u.id} style={{ ...S.flex(10), padding: "7px 0", borderBottom: "1px solid #F5F5F5" }}>
-                      <div style={{ ...S.avatar(avatarColor(u.id)), width: 30, height: 30, fontSize: 10 }}>{u.avatar || u.name?.[0]}</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name}</div>
-                        <div style={{ fontSize: 11, color: "#8A8A8E" }}>{u.title || u.role}</div>
-                      </div>
-                      <span style={{ ...S.badge(STOIC_NAVY), fontSize: 10 }}>{u.role}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           );
         })}
       </div>
+      {memberModal && (() => {
+        const members = users.filter(u => u.deptId === memberModal.id);
+        return (
+          <Modal title={`${memberModal.name} — Üyeler`} onClose={() => setMemberModal(null)}>
+            {members.length === 0 ? (
+              <div style={S.empty}>Bu departmanda üye yok</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {members.map(u => (
+                  <div key={u.id} style={{ ...S.flex(10), padding: "10px 12px", borderRadius: 10, background: "#F9F9FB", border: "1px solid #ECECEF" }}>
+                    <div style={{ ...S.avatar(avatarColor(u.id)), width: 34, height: 34, fontSize: 11 }}>{u.avatar || u.name?.[0]}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name}</div>
+                      <div style={{ fontSize: 11, color: "#8A8A8E" }}>{u.title || "—"}</div>
+                    </div>
+                    <span style={{ ...S.badge(hasAdminRole(u.role) ? ROMA_RED : STOIC_NAVY), fontSize: 10 }}>{displayRole(u.role)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
       {modal && <Modal title={modal.mode === "add" ? "Yeni Departman" : "Düzenle"} onClose={() => setModal(null)}>
         <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
           <div><label style={S.label}>Ad</label><input style={S.input} value={modal.dept.name} onChange={e => setModal(p => ({ ...p, dept: { ...p.dept, name: e.target.value } }))} /></div>
@@ -705,13 +878,16 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
 }
 
 // ─── USERS ADMIN ──────────────────────────────────────────────────────────────
-function UsersPage({ users, depts, userProfile, currentUser }) {
+function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
   const [modal, setModal] = useState(null);
+  const [approveModal, setApproveModal] = useState(null);
+  const [tab, setTab] = useState("users");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   if (!hasAdminRole(userProfile?.role)) return <div style={S.card}><div style={S.empty}>Başkan yetkisi gereklidir.</div></div>;
 
-  const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158" };
+  const pending = (registrations || []).filter(r => r.status === "bekliyor");
+  const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Teknik Yönetici": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158", "Denetmen": GOLD };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
   const createUser = async () => {
@@ -737,20 +913,82 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
 
   const updateUser = async () => {
     await updateDoc(doc(db, "users", modal.user.id), {
-      name: modal.user.name,
-      role: modal.user.role,
-      deptId: modal.user.deptId || null,
-      title: modal.user.title || "",
-      avatar: modal.user.avatar || "",
-      managerId: modal.user.managerId || null,
+      name: modal.user.name, role: modal.user.role,
+      deptId: modal.user.deptId || null, title: modal.user.title || "",
+      avatar: modal.user.avatar || "", managerId: modal.user.managerId || null,
     });
     setModal(null);
   };
 
+  const confirmApprove = async () => {
+    if (!approveModal) return;
+    setLoading(true); setErr("");
+    try {
+      const { reg, role, deptId, title } = approveModal;
+      const cred = await createUserWithEmailAndPassword(auth, reg.email, reg.password);
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name: reg.name, email: reg.email, role,
+        deptId: deptId || null, title: title || "",
+        avatar: reg.name.slice(0, 2).toUpperCase(),
+        managerId: null, createdAt: serverTimestamp(),
+      });
+      await deleteDoc(doc(db, "registrations", reg.id));
+      setApproveModal(null);
+    } catch (e) { setErr("Onaylama hatası: " + e.message); }
+    setLoading(false);
+  };
+
+  const rejectRegistration = async (reg) => {
+    if (!window.confirm(`"${reg.name}" adlı kullanıcının kaydını reddet?`)) return;
+    await deleteDoc(doc(db, "registrations", reg.id));
+  };
+
   return (
     <div>
-      <div style={{ ...S.flexBetween, marginBottom: 14 }}><div /><button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button></div>
-      <div style={S.card}>
+      <div style={{ ...S.flexBetween, marginBottom: 14 }}>
+        <div style={S.flex(8)}>
+          <button style={S.btn(tab === "users" ? "primary" : "ghost")} onClick={() => setTab("users")}>Kullanıcılar</button>
+          <button style={S.btn(tab === "pending" ? "primary" : "ghost")} onClick={() => setTab("pending")}>
+            Kayıt Bekleyenler
+            {pending.length > 0 && <span style={{ background: ROMA_RED, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700, marginLeft: 6 }}>{pending.length}</span>}
+          </button>
+        </div>
+        {tab === "users" && <button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button>}
+      </div>
+      {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 10, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+
+      {tab === "pending" && (
+        <div style={S.card}>
+          {pending.length === 0 ? <div style={S.empty}>Bekleyen kayıt talebi yok.</div> : (
+            <table style={S.table}>
+              <thead><tr>{["Ad Soyad", "Talep Edilen Kadro", "Tarih", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>{pending.map(r => (
+                <tr key={r.id}>
+                  <td style={S.td}>
+                    <div style={S.flex(8)}>
+                      <div style={S.avatar(avatarColor(r.id))}>{r.name?.slice(0, 2).toUpperCase()}</div>
+                      <div><div style={{ fontWeight: 700 }}>{r.name}</div><div style={{ fontSize: 11.5, color: "#8A8A8E" }}>{r.email}</div></div>
+                    </div>
+                  </td>
+                  <td style={S.td}>
+                    {r.title && <div style={{ fontWeight: 600, fontSize: 12.5 }}>{r.title}</div>}
+                    {r.desiredDept && <span style={S.tag}>{r.desiredDept}</span>}
+                  </td>
+                  <td style={S.td}>{fmtDate(r.createdAt)}</td>
+                  <td style={S.td}>
+                    <div style={S.flex(6)}>
+                      <button style={S.btn("green")} onClick={() => setApproveModal({ reg: r, role: "Üye", deptId: "", title: r.title || "" })}>Onayla</button>
+                      <button style={{ ...S.btn("ghost"), color: ROMA_RED }} onClick={() => rejectRegistration(r)}>Reddet</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === "users" && <div style={S.card}>
         <table style={S.table}>
           <thead><tr>{["İsim", "E-posta", "Unvan", "Rol", "Departman", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>{users.map(u => (
@@ -764,7 +1002,45 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
             </tr>
           ))}</tbody>
         </table>
-      </div>
+      </div>}
+
+      {approveModal && (
+        <Modal title="Kullanıcıyı Onayla" onClose={() => setApproveModal(null)}>
+          <div style={{ background: "#F9FAFB", border: "1px solid #E5E5E5", borderRadius: 9, padding: "12px 14px", marginBottom: 16, fontSize: 12.5, lineHeight: 1.9 }}>
+            <div><strong>Ad:</strong> {approveModal.reg.name}</div>
+            <div><strong>E-posta:</strong> {approveModal.reg.email}</div>
+            {approveModal.reg.title && <div><strong>Talep ettiği unvan:</strong> {approveModal.reg.title}</div>}
+            {approveModal.reg.desiredDept && <div><strong>Talep ettiği departman:</strong> {approveModal.reg.desiredDept}</div>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+            <div style={S.formRow}>
+              <div><label style={S.label}>Sistem Rolü</label>
+                <select style={S.select} value={approveModal.role} onChange={e => setApproveModal(p => ({ ...p, role: e.target.value }))}>
+                  <option value="Başkan">Başkan</option>
+                  <option value="Teknik Yönetici">Teknik Yönetici</option>
+                  <option value="Departman Yöneticisi">Departman Yöneticisi</option>
+                  <option value="Üye">Departman Üyesi</option>
+                  <option value="Denetmen">Denetmen</option>
+                </select>
+              </div>
+              <div><label style={S.label}>Departman</label>
+                <select style={S.select} value={approveModal.deptId} onChange={e => setApproveModal(p => ({ ...p, deptId: e.target.value }))}>
+                  <option value="">— Atanmadı —</option>
+                  {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><label style={S.label}>Unvan / Görev</label>
+              <input style={S.input} value={approveModal.title} onChange={e => setApproveModal(p => ({ ...p, title: e.target.value }))} />
+            </div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <div style={{ ...S.flex(8), justifyContent: "flex-end" }}>
+              <button style={S.btn("ghost")} onClick={() => setApproveModal(null)}>İptal</button>
+              <button style={S.btn("green")} onClick={confirmApprove} disabled={loading}>{loading ? "Onaylanıyor…" : "Hesabı Oluştur ve Onayla"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {modal && <Modal title={modal.mode === "add" ? "Yeni Kullanıcı" : "Düzenle"} onClose={() => setModal(null)}>
         <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
           <div style={S.formRow}>
@@ -776,7 +1052,7 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
             <div><label style={S.label}>Şifre</label><input type="password" style={S.input} value={modal.user.password} onChange={e => setModal(p => ({ ...p, user: { ...p.user, password: e.target.value } }))} /></div>
           </>}
           <div style={S.formRow}>
-            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option></select></div>
+            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Teknik Yönetici">Teknik Yönetici</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option><option value="Denetmen">Denetmen</option></select></div>
             <div><label style={S.label}>Departman</label><select style={S.select} value={modal.user.deptId || ""} onChange={e => setModal(p => ({ ...p, user: { ...p.user, deptId: e.target.value || null } }))}><option value="">—</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
           {err && <div style={{ color: "#6A5610", fontSize: 12 }}>{err}</div>}
@@ -1032,14 +1308,39 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
               {userOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
           </div>
-          <div style={{ border: "1px solid #ECECEF", borderRadius: 12, overflow: "hidden" }}>
-            {[ ["Toplam Devamsızlık", personTotals.totalAbsence], ["Gelmedi", personTotals.absent], ["Izinli", personTotals.excused], ["Katildi", personTotals.present], ["Toplam Kayit", personTotals.total] ].map(([label, value], i) => (
+          <div style={{ border: "1px solid #ECECEF", borderRadius: 12, overflow: "hidden", marginBottom: 10 }}>
+            {[ ["Toplam Devamsızlık", personTotals.totalAbsence, personTotals.totalAbsence >= 3 ? ROMA_RED : "#171717"], ["Gelmedi", personTotals.absent, personTotals.absent > 0 ? ROMA_RED : "#171717"], ["İzinli", personTotals.excused, GOLD], ["Katıldı", personTotals.present, "#30D158"], ["Toplam Kayıt", personTotals.total, "#171717"] ].map(([label, value, color], i) => (
               <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", borderBottom: i === 4 ? "none" : "1px solid #F1F1F3", fontSize: 12.5 }}>
                 <span style={{ color: "#64635F" }}>{label}</span>
-                <strong style={{ color: "#171717" }}>{value}</strong>
+                <strong style={{ color }}>{value}</strong>
               </div>
             ))}
           </div>
+          {selectedUser !== "all" && (() => {
+            const history = scopedRecords
+              .filter(r => r.userId === selectedUser && (r.status === "gelmedi" || r.status === "izinli"))
+              .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+            if (history.length === 0) return <div style={{ fontSize: 12, color: "#8A8A8E", textAlign: "center", padding: "8px 0" }}>Devamsızlık kaydı yok</div>;
+            return (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#98A2B3", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>Devamsızlık Geçmişi</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {history.map(r => (
+                    <div key={r.id} style={{ background: "#F9F9FB", borderRadius: 8, padding: "8px 10px", border: "1px solid #ECECEF" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: r.excuse ? 4 : 0 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#1D2939" }}>{r.meetingTitle || "Toplantı"}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 11, color: "#8A8A8E" }}>{fmtDate(r.date)}</span>
+                          <span style={{ ...S.badge(r.status === "gelmedi" ? ROMA_RED : GOLD), fontSize: 10 }}>{r.status === "gelmedi" ? "Gelmedi" : "İzinli"}</span>
+                        </div>
+                      </div>
+                      {r.excuse && <div style={{ fontSize: 11.5, color: "#636366", fontStyle: "italic" }}>Mazeret: {r.excuse}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1289,6 +1590,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [fileRequests, setFileRequests] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [registrations, setRegistrations] = useState([]);
 
   // Auth listener
   useEffect(() => {
@@ -1374,36 +1676,69 @@ export default function App() {
       onSnapshot(collection(db, "messages"), s => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "fileRequests"), s => setFileRequests(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "attendance"), s => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+      onSnapshot(collection(db, "registrations"), s => setRegistrations(s.docs.map(d => ({ id: d.id, ...d.data() })))),
     ];
     return () => subs.forEach(u => u());
   }, [currentUser]);
 
   const pendingMsgs = messages.filter(m => (m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId) && m.status === "bekliyor").length;
+  const pendingRegs = hasSuperRole(userProfile?.role) ? registrations.filter(r => r.status === "bekliyor").length : 0;
 
   if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yukleniyor...</div>;
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
   if (!userProfile) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Profil yukleniyor...</div>;
 
-  const NAV_GROUPS = [
-    { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] },
-    { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
-    { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }] },
-    { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
-  ];
-  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar" };
-  const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile };
+  const isDenetmen = isDenetmenRole(userProfile?.role);
+  const canAudit = hasSuperRole(userProfile?.role) || isDenetmen;
+  const rLevel = roleLevel(userProfile?.role);
 
+  // Nav grupları role göre filtrelenir
+  const NAV_GROUPS = (() => {
+    if (isDenetmen) {
+      // Denetmen: sadece Denetim paneli
+      return [{ label: "Denetim", items: [{ id: "audit", label: "Denetim", icon: "reports" }] }];
+    }
+    const genel = { label: "Genel", items: [{ id: "dashboard", label: "Dashboard", icon: "dashboard" }, { id: "tasks", label: "Görevler", icon: "tasks" }, { id: "meetings", label: "Toplantılar", icon: "calendar" }, { id: "attendance", label: "Devamsızlık", icon: "check" }] };
+    const iletisim = { label: "İletişim", items: [{ id: "messages", label: "Mesajlar", icon: "inbox", badge: pendingMsgs }] };
+    if (rLevel === 0) {
+      // Başkan / Teknik Yönetici: tam erişim
+      return [
+        genel,
+        { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users", badge: pendingRegs }] },
+        iletisim,
+        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, { id: "audit", label: "Denetim", icon: "reports" }] },
+      ];
+    }
+    if (rLevel === 1) {
+      // Departman Yöneticisi: kendi departmanı kapsamında
+      return [
+        genel,
+        { label: "Organizasyon", items: [{ id: "departments", label: "Departmanlar", icon: "users" }] },
+        iletisim,
+        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
+      ];
+    }
+    // Departman Üyesi
+    return [genel, iletisim];
+  })();
+  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli" };
+  const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile, registrations };
+
+  const noAccess = <div style={S.card}><div style={S.empty}>Bu sayfaya erişim yetkiniz yok.</div></div>;
   const renderPage = () => {
+    // Denetmen sadece audit sayfasına erişebilir
+    if (isDenetmen && page !== "audit") return noAccess;
     switch (page) {
       case "dashboard": return <Dashboard {...props} />;
       case "tasks": return <TasksPage {...props} />;
       case "meetings": return <MeetingsPage {...props} />;
       case "attendance": return <AttendancePage {...props} />;
-      case "orgtree": return <OrgTreePage {...props} />;
+      case "orgtree": return hasSuperRole(userProfile?.role) ? <OrgTreePage {...props} /> : noAccess;
       case "departments": return <DepartmentsPage {...props} />;
-      case "userlist": return <UsersPage {...props} />;
+      case "userlist": return hasSuperRole(userProfile?.role) ? <UsersPage {...props} /> : noAccess;
       case "messages": return <MessagesPage {...props} />;
       case "reports": return <ReportsPage {...props} />;
+      case "audit": return canAudit ? <AuditPage {...props} /> : noAccess;
       default: return null;
     }
   };
@@ -1454,6 +1789,116 @@ export default function App() {
           <div style={{ fontSize: 12.5, color: "#667085" }}>{new Date().toLocaleDateString("tr-TR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
         </div>
         <div style={S.content}>{renderPage()}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AUDIT ───────────────────────────────────────────────────────────────────
+function AuditPage({ attendance, tasks, users, depts }) {
+  const getName = id => users.find(u => u.id === id)?.name || "—";
+  const getDept = id => depts.find(d => d.id === id)?.name || "—";
+
+  // Users with 3+ "gelmedi" absences
+  const absenceCounts = {};
+  attendance.forEach(r => {
+    if (r.status === "gelmedi") {
+      absenceCounts[r.userId] = (absenceCounts[r.userId] || 0) + 1;
+    }
+  });
+  const absentWarnings = Object.entries(absenceCounts)
+    .filter(([, count]) => count >= 3)
+    .sort((a, b) => b[1] - a[1]);
+
+  // Delayed tasks
+  const delayedTasks = tasks.filter(t => t.status === "gecikmeli");
+
+  // Tasks pending approval
+  const pendingApproval = tasks.filter(t => t.status === "yapıldı");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
+        {[
+          ["Devamsızlık Uyarısı", absentWarnings.length, ROMA_RED],
+          ["Gecikmeli Görev", delayedTasks.length, GOLD],
+          ["Onay Bekleyen Görev", pendingApproval.length, STOIC_NAVY],
+        ].map(([label, num, color]) => (
+          <div key={label} style={S.stat(color)}>
+            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -1 }}>{num}</div>
+            <div style={{ fontSize: 11.5, opacity: 0.85, marginTop: 3 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={S.card}>
+        <div style={{ ...S.cardTitle, marginBottom: 12, color: ROMA_RED }}>⚠ Devamsızlık Uyarıları (3+ Gelmedi)</div>
+        {absentWarnings.length === 0 ? (
+          <div style={S.empty}>Devamsızlık uyarısı yok</div>
+        ) : (
+          <table style={S.table}>
+            <thead><tr>{["Kişi", "Departman", "Gelmedi Sayısı", "Durum"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {absentWarnings.map(([userId, count]) => {
+                const u = users.find(x => x.id === userId);
+                return (
+                  <tr key={userId}>
+                    <td style={S.td}><div style={S.flex(8)}><div style={{ ...S.avatar(avatarColor(userId)), width: 28, height: 28, fontSize: 10 }}>{u?.avatar || u?.name?.[0] || "?"}</div><strong>{getName(userId)}</strong></div></td>
+                    <td style={S.td}><span style={S.tag}>{u?.deptId ? getDept(u.deptId) : "—"}</span></td>
+                    <td style={S.td}><span style={{ ...S.badge(ROMA_RED), fontSize: 12, fontWeight: 700 }}>{count} kez</span></td>
+                    <td style={S.td}><span style={{ ...S.badge(ROMA_RED) }}>Uyarı</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={S.card}>
+        <div style={{ ...S.cardTitle, marginBottom: 12, color: GOLD }}>⚠ Gecikmeli Görevler</div>
+        {delayedTasks.length === 0 ? (
+          <div style={S.empty}>Gecikmeli görev yok</div>
+        ) : (
+          <table style={S.table}>
+            <thead><tr>{["Görev", "Departman", "Bitiş Tarihi", "Atananlar", "Mazeret"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {delayedTasks.map(t => (
+                <tr key={t.id}>
+                  <td style={S.td}><strong>{t.title}</strong>{t.desc && <div style={{ fontSize: 11.5, color: "#8A8A8E" }}>{t.desc}</div>}</td>
+                  <td style={S.td}><span style={S.tag}>{getDept(t.deptId)}</span></td>
+                  <td style={S.td}><span style={{ color: ROMA_RED, fontWeight: 600 }}>{fmtDate(t.endDate)}</span></td>
+                  <td style={S.td}><div style={{ ...S.flex(4), flexWrap: "wrap" }}>{(Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo]).filter(Boolean).map(id => <span key={id} style={S.tag}>{getName(id)}</span>)}</div></td>
+                  <td style={{ ...S.td, maxWidth: 200, color: t.mazeretGecikme ? "#636366" : ROMA_RED, fontStyle: t.mazeretGecikme ? "italic" : "normal" }}>
+                    {t.mazeretGecikme || <span style={{ fontWeight: 600 }}>Mazeret girilmedi</span>}
+                    {t.mazeretTarih && <div style={{ fontSize: 10.5, color: "#8A8A8E" }}>{fmtDate(t.mazeretTarih)}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={S.card}>
+        <div style={{ ...S.cardTitle, marginBottom: 12, color: STOIC_NAVY }}>Onay Bekleyen Görevler</div>
+        {pendingApproval.length === 0 ? (
+          <div style={S.empty}>Onay bekleyen görev yok</div>
+        ) : (
+          <table style={S.table}>
+            <thead><tr>{["Görev", "Departman", "Atananlar", "Bitiş"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {pendingApproval.map(t => (
+                <tr key={t.id}>
+                  <td style={S.td}><strong>{t.title}</strong></td>
+                  <td style={S.td}><span style={S.tag}>{getDept(t.deptId)}</span></td>
+                  <td style={S.td}><div style={{ ...S.flex(4), flexWrap: "wrap" }}>{(Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo]).filter(Boolean).map(id => <span key={id} style={S.tag}>{getName(id)}</span>)}</div></td>
+                  <td style={S.td}>{fmtDate(t.endDate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
