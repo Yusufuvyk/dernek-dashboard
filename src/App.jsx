@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { db, auth } from "./firebase";
 import marcusLogo from "./assets/marcus-logo.svg";
 import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
-  onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where
+  onSnapshot, query, orderBy, serverTimestamp, getDocs, limit, where, getDoc
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword,
@@ -68,7 +68,7 @@ const displayRole = r => {
 };
 
 const openPrintableReport = ({ title, bodyHtml }) => {
-  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;white-space:pre-wrap;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
+  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;line-height:1.7;}ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const popup = window.open(url, "_blank", "noopener,noreferrer");
@@ -190,44 +190,140 @@ function Modal({ title, onClose, children }) {
   );
 }
 
+// ─── RICH TEXT EDITOR ────────────────────────────────────────────────────────
+function RichTextEditor({ value, onChange, minHeight = 90, readOnly = false }) {
+  const ref = useRef(null);
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (ref.current && !initialized.current) {
+      ref.current.innerHTML = value || "";
+      initialized.current = true;
+    }
+  }, []);
+
+  const exec = (cmd) => {
+    ref.current?.focus();
+    document.execCommand(cmd, false, null);
+    onChange(ref.current?.innerHTML || "");
+  };
+
+  const toolbarBtn = (label, cmd, title) => (
+    <button key={cmd} type="button" title={title} onMouseDown={e => { e.preventDefault(); exec(cmd); }}
+      style={{ padding: "3px 9px", borderRadius: 6, border: "1px solid #DADADA", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1D2939" }}
+    >{label}</button>
+  );
+
+  return (
+    <div style={{ border: "1px solid #DADADA", borderRadius: 10, overflow: "hidden", background: readOnly ? "#F9F9F9" : "#fff" }}>
+      {!readOnly && (
+        <div style={{ display: "flex", gap: 5, padding: "6px 8px", borderBottom: "1px solid #EAEAEA", background: "#F9FAFB" }}>
+          {toolbarBtn("B", "bold", "Kalın")}
+          {toolbarBtn("İ", "italic", "İtalik")}
+          {toolbarBtn("• Liste", "insertUnorderedList", "Madde işaretli liste")}
+          {toolbarBtn("1. Liste", "insertOrderedList", "Numaralı liste")}
+        </div>
+      )}
+      <div ref={ref} contentEditable={!readOnly} suppressContentEditableWarning
+        onInput={e => !readOnly && onChange(e.currentTarget.innerHTML)}
+        style={{ padding: "9px 12px", minHeight, outline: "none", fontSize: 13, lineHeight: 1.75, fontFamily: "inherit", background: readOnly ? "#F9F9F9" : "#fff" }}
+      />
+    </div>
+  );
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
+  const [tab, setTab] = useState("login");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handle = async () => {
-    setLoading(true);
-    setErr("");
+  const [reg, setReg] = useState({ name: "", email: "", pass: "", title: "", dept: "" });
+  const setF = (k, v) => setReg(p => ({ ...p, [k]: v }));
+  const [regDone, setRegDone] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true); setErr("");
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
       onLogin(cred.user);
-    } catch (e) {
-      setErr("E-posta veya şifre hatalı.");
-    }
+    } catch { setErr("E-posta veya şifre hatalı."); }
     setLoading(false);
   };
 
+  const handleRegister = async () => {
+    if (!reg.name.trim() || !reg.email.trim() || !reg.pass.trim()) { setErr("Ad, e-posta ve şifre zorunludur."); return; }
+    if (reg.pass.length < 6) { setErr("Şifre en az 6 karakter olmalıdır."); return; }
+    setLoading(true); setErr("");
+    try {
+      const existing = await getDocs(query(collection(db, "registrations"), where("email", "==", reg.email.trim().toLowerCase()), limit(1)));
+      if (!existing.empty) { setErr("Bu e-posta ile zaten bir kayıt talebi mevcut."); setLoading(false); return; }
+      await addDoc(collection(db, "registrations"), {
+        name: reg.name.trim(), email: reg.email.trim().toLowerCase(),
+        password: reg.pass, title: reg.title.trim(), desiredDept: reg.dept.trim(),
+        status: "bekliyor", createdAt: new Date().toISOString(),
+      });
+      setRegDone(true);
+    } catch (e) { setErr("Kayıt talebi gönderilemedi: " + e.message); }
+    setLoading(false);
+  };
+
+  const tabBtn = (id, label) => (
+    <button onClick={() => { setTab(id); setErr(""); }}
+      style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, fontFamily: "inherit", background: tab === id ? "#111827" : "transparent", color: tab === id ? "#fff" : "#667085" }}
+    >{label}</button>
+  );
+
   return (
     <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 380, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
-        <div style={{ marginBottom: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 30px", width: 420, border: "1px solid #E2E2DD", boxShadow: "0 10px 30px rgba(0,0,0,.06)" }}>
+        <div style={{ marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, fontWeight: 800, letterSpacing: -0.3, color: "#181715" }}>
             <img src={marcusLogo} alt="Marcus logo" style={{ width: 34, height: 34, objectFit: "contain" }} />
             <span>Marcus</span>
           </div>
-          <div style={{ fontSize: 13, color: "#5E5A55", marginTop: 3 }}>Panele giris yapin</div>
         </div>
-        <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
-        <div style={{ marginBottom: 18 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} /></div>
-        {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
-        <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handle} disabled={loading}>
-          {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
-        </button>
-        <div style={{ marginTop: 16, fontSize: 12, color: "#8A8A8E", textAlign: "center" }}>
-          Hesabınız yoksa Admin size oluşturur.
+        <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 10, padding: 3, marginBottom: 22 }}>
+          {tabBtn("login", "Giriş Yap")}
+          {tabBtn("register", "Kayıt Ol")}
         </div>
+
+        {tab === "login" ? (
+          <>
+            <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
+            <div style={{ marginBottom: 18 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handleLogin} disabled={loading}>
+              {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
+            </button>
+          </>
+        ) : regDone ? (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>✓</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Talebiniz alındı!</div>
+            <div style={{ fontSize: 13, color: "#667085", lineHeight: 1.7 }}>Kayıt talebiniz admin onayına gönderildi.<br />Onaylandıktan sonra giriş yapabilirsiniz.</div>
+            <button style={{ ...S.btn("ghost"), marginTop: 18 }} onClick={() => { setTab("login"); setRegDone(false); setReg({ name: "", email: "", pass: "", title: "", dept: "" }); }}>Giriş sayfasına dön</button>
+          </div>
+        ) : (
+          <>
+            <div style={S.formRow}>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>Ad Soyad</label><input style={S.input} value={reg.name} onChange={e => setF("name", e.target.value)} /></div>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>Unvan / Görev</label><input style={S.input} value={reg.title} onChange={e => setF("title", e.target.value)} placeholder="ör. Muhasebe Uzmanı" /></div>
+            </div>
+            <div style={{ marginBottom: 11 }}><label style={S.label}>Departman</label><input style={S.input} value={reg.dept} onChange={e => setF("dept", e.target.value)} placeholder="ör. Finans, Operasyon…" /></div>
+            <div style={S.formRow}>
+              <div style={{ marginBottom: 11 }}><label style={S.label}>E-posta</label><input style={S.input} type="email" value={reg.email} onChange={e => setF("email", e.target.value)} /></div>
+              <div style={{ marginBottom: 16 }}><label style={S.label}>Şifre</label><input style={S.input} type="password" value={reg.pass} onChange={e => setF("pass", e.target.value)} /></div>
+            </div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 11, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <button style={{ ...S.btn("primary"), width: "100%", justifyContent: "center", padding: "10px 0", fontSize: 14 }} onClick={handleRegister} disabled={loading}>
+              {loading ? "Gönderiliyor…" : "Kayıt Talebi Gönder"}
+            </button>
+            <div style={{ marginTop: 12, fontSize: 12, color: "#8A8A8E", textAlign: "center" }}>Talebiniz admin tarafından incelenerek onaylanacaktır.</div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -653,7 +749,7 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
         <div><strong>Tarih:</strong> {fmtDateTime(meeting.datetime)}</div>
         {readOnly && <div style={{ marginTop: 4 }}><span style={{ ...S.badge("#30D158"), fontSize: 11 }}>Yapıldı ✓</span></div>}
       </div>
-      <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><textarea style={{ ...S.textarea, minHeight: 80, background: readOnly ? "#F9F9F9" : "#fff" }} value={kararlar} onChange={e => !readOnly && setKararlar(e.target.value)} readOnly={readOnly} /></div>
+      <div style={{ marginBottom: 11 }}><label style={S.label}>Alınan Kararlar</label><RichTextEditor value={kararlar} onChange={v => !readOnly && setKararlar(v)} minHeight={80} readOnly={readOnly} /></div>
       <div style={{ marginBottom: 12 }}>
         <label style={S.label}>{readOnly ? "Katılanlar" : "Katılanlar (devamsızlık için işaretleyin)"}</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
@@ -684,7 +780,7 @@ function ReportModal({ meeting, users, depts, onSave, onClose }) {
           })}
         </div>
       </div>
-      <div style={{ marginBottom: 16 }}><label style={S.label}>Aksiyon Maddeleri</label><textarea style={{ ...S.textarea, minHeight: 80, background: readOnly ? "#F9F9F9" : "#fff" }} value={aksiyonlar} onChange={e => !readOnly && setAksiyonlar(e.target.value)} readOnly={readOnly} /></div>
+      <div style={{ marginBottom: 16 }}><label style={S.label}>Aksiyon Maddeleri</label><RichTextEditor value={aksiyonlar} onChange={v => !readOnly && setAksiyonlar(v)} minHeight={80} readOnly={readOnly} /></div>
       <div style={{ ...S.flexBetween }}>
         <button style={S.btn("ghost")} onClick={printPdf}><Icon name="download" size={13} /> PDF</button>
         <div style={S.flex(7)}>
@@ -782,12 +878,15 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
 }
 
 // ─── USERS ADMIN ──────────────────────────────────────────────────────────────
-function UsersPage({ users, depts, userProfile, currentUser }) {
+function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
   const [modal, setModal] = useState(null);
+  const [approveModal, setApproveModal] = useState(null);
+  const [tab, setTab] = useState("users");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   if (!hasAdminRole(userProfile?.role)) return <div style={S.card}><div style={S.empty}>Başkan yetkisi gereklidir.</div></div>;
 
+  const pending = (registrations || []).filter(r => r.status === "bekliyor");
   const ROLE_COLOR = { "Admin": ROMA_RED, "Başkan": ROMA_RED, "Teknik Yönetici": ROMA_RED, "Departman Yöneticisi": STOIC_NAVY, "Departman Üyesi": STOIC_NAVY, "Üye": "#30D158", "Genel Üye": "#30D158", "Denetmen": GOLD };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
@@ -814,20 +913,82 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
 
   const updateUser = async () => {
     await updateDoc(doc(db, "users", modal.user.id), {
-      name: modal.user.name,
-      role: modal.user.role,
-      deptId: modal.user.deptId || null,
-      title: modal.user.title || "",
-      avatar: modal.user.avatar || "",
-      managerId: modal.user.managerId || null,
+      name: modal.user.name, role: modal.user.role,
+      deptId: modal.user.deptId || null, title: modal.user.title || "",
+      avatar: modal.user.avatar || "", managerId: modal.user.managerId || null,
     });
     setModal(null);
   };
 
+  const confirmApprove = async () => {
+    if (!approveModal) return;
+    setLoading(true); setErr("");
+    try {
+      const { reg, role, deptId, title } = approveModal;
+      const cred = await createUserWithEmailAndPassword(auth, reg.email, reg.password);
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name: reg.name, email: reg.email, role,
+        deptId: deptId || null, title: title || "",
+        avatar: reg.name.slice(0, 2).toUpperCase(),
+        managerId: null, createdAt: serverTimestamp(),
+      });
+      await deleteDoc(doc(db, "registrations", reg.id));
+      setApproveModal(null);
+    } catch (e) { setErr("Onaylama hatası: " + e.message); }
+    setLoading(false);
+  };
+
+  const rejectRegistration = async (reg) => {
+    if (!window.confirm(`"${reg.name}" adlı kullanıcının kaydını reddet?`)) return;
+    await deleteDoc(doc(db, "registrations", reg.id));
+  };
+
   return (
     <div>
-      <div style={{ ...S.flexBetween, marginBottom: 14 }}><div /><button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button></div>
-      <div style={S.card}>
+      <div style={{ ...S.flexBetween, marginBottom: 14 }}>
+        <div style={S.flex(8)}>
+          <button style={S.btn(tab === "users" ? "primary" : "ghost")} onClick={() => setTab("users")}>Kullanıcılar</button>
+          <button style={S.btn(tab === "pending" ? "primary" : "ghost")} onClick={() => setTab("pending")}>
+            Kayıt Bekleyenler
+            {pending.length > 0 && <span style={{ background: ROMA_RED, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700, marginLeft: 6 }}>{pending.length}</span>}
+          </button>
+        </div>
+        {tab === "users" && <button style={S.btn()} onClick={() => setModal({ mode: "add", user: { name: "", email: "", password: "", role: "Üye", deptId: "", title: "", avatar: "", managerId: null } })}><Icon name="plus" size={15} /> Kullanıcı Ekle</button>}
+      </div>
+      {err && <div style={{ color: "#6A5610", fontSize: 12, marginBottom: 10, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+
+      {tab === "pending" && (
+        <div style={S.card}>
+          {pending.length === 0 ? <div style={S.empty}>Bekleyen kayıt talebi yok.</div> : (
+            <table style={S.table}>
+              <thead><tr>{["Ad Soyad", "Talep Edilen Kadro", "Tarih", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>{pending.map(r => (
+                <tr key={r.id}>
+                  <td style={S.td}>
+                    <div style={S.flex(8)}>
+                      <div style={S.avatar(avatarColor(r.id))}>{r.name?.slice(0, 2).toUpperCase()}</div>
+                      <div><div style={{ fontWeight: 700 }}>{r.name}</div><div style={{ fontSize: 11.5, color: "#8A8A8E" }}>{r.email}</div></div>
+                    </div>
+                  </td>
+                  <td style={S.td}>
+                    {r.title && <div style={{ fontWeight: 600, fontSize: 12.5 }}>{r.title}</div>}
+                    {r.desiredDept && <span style={S.tag}>{r.desiredDept}</span>}
+                  </td>
+                  <td style={S.td}>{fmtDate(r.createdAt)}</td>
+                  <td style={S.td}>
+                    <div style={S.flex(6)}>
+                      <button style={S.btn("green")} onClick={() => setApproveModal({ reg: r, role: "Üye", deptId: "", title: r.title || "" })}>Onayla</button>
+                      <button style={{ ...S.btn("ghost"), color: ROMA_RED }} onClick={() => rejectRegistration(r)}>Reddet</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === "users" && <div style={S.card}>
         <table style={S.table}>
           <thead><tr>{["İsim", "E-posta", "Unvan", "Rol", "Departman", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
           <tbody>{users.map(u => (
@@ -841,7 +1002,45 @@ function UsersPage({ users, depts, userProfile, currentUser }) {
             </tr>
           ))}</tbody>
         </table>
-      </div>
+      </div>}
+
+      {approveModal && (
+        <Modal title="Kullanıcıyı Onayla" onClose={() => setApproveModal(null)}>
+          <div style={{ background: "#F9FAFB", border: "1px solid #E5E5E5", borderRadius: 9, padding: "12px 14px", marginBottom: 16, fontSize: 12.5, lineHeight: 1.9 }}>
+            <div><strong>Ad:</strong> {approveModal.reg.name}</div>
+            <div><strong>E-posta:</strong> {approveModal.reg.email}</div>
+            {approveModal.reg.title && <div><strong>Talep ettiği unvan:</strong> {approveModal.reg.title}</div>}
+            {approveModal.reg.desiredDept && <div><strong>Talep ettiği departman:</strong> {approveModal.reg.desiredDept}</div>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+            <div style={S.formRow}>
+              <div><label style={S.label}>Sistem Rolü</label>
+                <select style={S.select} value={approveModal.role} onChange={e => setApproveModal(p => ({ ...p, role: e.target.value }))}>
+                  <option value="Başkan">Başkan</option>
+                  <option value="Teknik Yönetici">Teknik Yönetici</option>
+                  <option value="Departman Yöneticisi">Departman Yöneticisi</option>
+                  <option value="Üye">Departman Üyesi</option>
+                  <option value="Denetmen">Denetmen</option>
+                </select>
+              </div>
+              <div><label style={S.label}>Departman</label>
+                <select style={S.select} value={approveModal.deptId} onChange={e => setApproveModal(p => ({ ...p, deptId: e.target.value }))}>
+                  <option value="">— Atanmadı —</option>
+                  {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><label style={S.label}>Unvan / Görev</label>
+              <input style={S.input} value={approveModal.title} onChange={e => setApproveModal(p => ({ ...p, title: e.target.value }))} />
+            </div>
+            {err && <div style={{ color: "#6A5610", fontSize: 12, padding: "7px 11px", background: "#F7EFC7", borderRadius: 7 }}>{err}</div>}
+            <div style={{ ...S.flex(8), justifyContent: "flex-end" }}>
+              <button style={S.btn("ghost")} onClick={() => setApproveModal(null)}>İptal</button>
+              <button style={S.btn("green")} onClick={confirmApprove} disabled={loading}>{loading ? "Onaylanıyor…" : "Hesabı Oluştur ve Onayla"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {modal && <Modal title={modal.mode === "add" ? "Yeni Kullanıcı" : "Düzenle"} onClose={() => setModal(null)}>
         <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
           <div style={S.formRow}>
@@ -1391,6 +1590,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [fileRequests, setFileRequests] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [registrations, setRegistrations] = useState([]);
 
   // Auth listener
   useEffect(() => {
@@ -1476,11 +1676,13 @@ export default function App() {
       onSnapshot(collection(db, "messages"), s => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "fileRequests"), s => setFileRequests(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "attendance"), s => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+      onSnapshot(collection(db, "registrations"), s => setRegistrations(s.docs.map(d => ({ id: d.id, ...d.data() })))),
     ];
     return () => subs.forEach(u => u());
   }, [currentUser]);
 
   const pendingMsgs = messages.filter(m => (m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId) && m.status === "bekliyor").length;
+  const pendingRegs = hasSuperRole(userProfile?.role) ? registrations.filter(r => r.status === "bekliyor").length : 0;
 
   if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yukleniyor...</div>;
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
@@ -1502,7 +1704,7 @@ export default function App() {
       // Başkan / Teknik Yönetici: tam erişim
       return [
         genel,
-        { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users" }] },
+        { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users", badge: pendingRegs }] },
         iletisim,
         { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, { id: "audit", label: "Denetim", icon: "reports" }] },
       ];
@@ -1520,7 +1722,7 @@ export default function App() {
     return [genel, iletisim];
   })();
   const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli" };
-  const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile };
+  const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile, registrations };
 
   const noAccess = <div style={S.card}><div style={S.empty}>Bu sayfaya erişim yetkiniz yok.</div></div>;
   const renderPage = () => {
