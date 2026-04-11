@@ -18,6 +18,9 @@ const today = () => new Date().toISOString().slice(0, 10);
 const dayFromDateTime = dt => (dt ? String(dt).slice(0, 10) : today());
 const fmtDate = d => d ? new Date(d).toLocaleDateString("tr-TR") : "—";
 const fmtDateTime = d => d ? new Date(d).toLocaleString("tr-TR") : "—";
+// Şu anki zamanı yerel saat dilimiyle datetime-local formatında döndürür
+const nowLocalISO = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+const monthLabel = (ym) => { const [y, m] = ym.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("tr-TR", { month: "long", year: "numeric" }); };
 const timeAgo = d => {
   if (!d) return "";
   const diff = Math.floor((Date.now() - new Date(d)) / 60000);
@@ -520,7 +523,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
   };
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
-  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: new Date().toISOString().slice(0, 16), endDate: "", notes: "" };
+  const emptyTask = { title: "", desc: "", deptId: depts[0]?.id || "", assignedTo: [currentUser?.uid || ""], startDate: nowLocalISO(), endDate: "", notes: "" };
 
   return (
     <div>
@@ -634,11 +637,25 @@ function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
         <div style={S.formRow}>
           <div>
             <label style={S.label}>Başlangıç</label>
-            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.startDate} onChange={e => !isEdit && set("startDate", e.target.value)} readOnly={isEdit} />
+            <input
+              type="datetime-local"
+              style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }}
+              value={f.startDate}
+              min={!isEdit ? nowLocalISO() : undefined}
+              onChange={e => !isEdit && set("startDate", e.target.value)}
+              readOnly={isEdit}
+            />
           </div>
           <div>
             <label style={S.label}>Bitiş</label>
-            <input type="datetime-local" style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }} value={f.endDate} onChange={e => !isEdit && set("endDate", e.target.value)} readOnly={isEdit} />
+            <input
+              type="datetime-local"
+              style={{ ...S.input, background: isEdit ? "#F5F5F5" : "#fff", color: isEdit ? "#8A8A8E" : "inherit" }}
+              value={f.endDate}
+              min={!isEdit ? (f.startDate || nowLocalISO()) : undefined}
+              onChange={e => !isEdit && set("endDate", e.target.value)}
+              readOnly={isEdit}
+            />
           </div>
         </div>
         {isEdit && <div style={{ fontSize: 11.5, color: "#8A8A8E", marginTop: -6 }}>Tarihler oluşturulduktan sonra değiştirilemez.</div>}
@@ -1409,9 +1426,59 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
   const [selectedDate, setSelectedDate] = useState(today());
   const [selectedDept, setSelectedDept] = useState("all");
   const [selectedUser, setSelectedUser] = useState("all");
+  const [reportMonth, setReportMonth] = useState(today().slice(0, 7));
   const roleRestrictedDept = hasAdminRole(userProfile?.role) ? null : userProfile?.deptId;
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const getName = id => users.find(u => u.id === id)?.name || "—";
+
+  const generateMonthlyAttendanceReport = () => {
+    const ml = monthLabel(reportMonth);
+    const base = roleRestrictedDept ? attendance.filter(r => r.deptId === roleRestrictedDept) : attendance;
+    const monthRecords = base.filter(r => r.date && r.date.startsWith(reportMonth));
+
+    const byUser = {};
+    monthRecords.forEach(r => {
+      if (!byUser[r.userId]) byUser[r.userId] = { name: getName(r.userId), dept: getDept(r.deptId), katildi: 0, gelmedi: 0, izinli: 0, records: [] };
+      if (r.status === "katildi") byUser[r.userId].katildi++;
+      else if (r.status === "gelmedi") byUser[r.userId].gelmedi++;
+      else if (r.status === "izinli") byUser[r.userId].izinli++;
+      byUser[r.userId].records.push(r);
+    });
+
+    const totKatildi = monthRecords.filter(r => r.status === "katildi").length;
+    const totGelmedi = monthRecords.filter(r => r.status === "gelmedi").length;
+    const totIzinli = monthRecords.filter(r => r.status === "izinli").length;
+
+    const userRows = Object.values(byUser)
+      .sort((a, b) => b.gelmedi - a.gelmedi)
+      .map(u => {
+        const detailRows = u.records
+          .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+          .map(r => `<tr style="background:#fafafa"><td style="padding-left:28px;color:#636366;font-size:12px">${r.meetingTitle || "Toplantı"}</td><td style="font-size:12px">${fmtDate(r.date)}</td><td style="font-size:12px;color:${r.status === "katildi" ? "#2A7A62" : r.status === "gelmedi" ? "#8B0000" : "#B98B2C"};font-weight:700">${r.status === "katildi" ? "Katıldı" : r.status === "gelmedi" ? "Gelmedi" : "İzinli"}</td><td style="font-size:11px;color:#636366;font-style:italic">${r.excuse || ""}</td></tr>`)
+          .join("");
+        return `<tr style="background:#fff"><td><strong>${u.name}</strong></td><td>${u.dept}</td><td style="color:#2A7A62;font-weight:700">${u.katildi}</td><td style="color:#8B0000;font-weight:700">${u.gelmedi}</td><td style="color:#B98B2C;font-weight:700">${u.izinli}</td><td>${u.katildi + u.gelmedi + u.izinli}</td></tr>${detailRows}`;
+      }).join("");
+
+    openPrintableReport({
+      title: `Devamsızlık Raporu — ${ml}`,
+      bodyHtml: `
+        <h1>Aylık Devamsızlık Denetim Raporu</h1>
+        <table>
+          <tr><td>Dönem</td><td><strong>${ml}</strong></td></tr>
+          <tr><td>Toplam Kayıt</td><td>${monthRecords.length}</td></tr>
+          <tr><td>Toplam Katıldı</td><td style="color:#2A7A62;font-weight:700">${totKatildi}</td></tr>
+          <tr><td>Toplam Gelmedi</td><td style="color:#8B0000;font-weight:700">${totGelmedi}</td></tr>
+          <tr><td>Toplam İzinli</td><td style="color:#B98B2C;font-weight:700">${totIzinli}</td></tr>
+          <tr><td>Katılım Oranı</td><td style="font-weight:700">${monthRecords.length ? Math.round((totKatildi / monthRecords.length) * 100) : 0}%</td></tr>
+        </table>
+        <h2>Kişi Bazlı Özet</h2>
+        <table>
+          <tr style="background:#f7f3f2"><td><b>Kişi</b></td><td><b>Departman</b></td><td><b>Katıldı</b></td><td><b>Gelmedi</b></td><td><b>İzinli</b></td><td><b>Toplam</b></td></tr>
+          ${userRows || "<tr><td colspan='6' style='text-align:center;color:#8A8A8E'>Bu dönemde kayıt bulunamadı</td></tr>"}
+        </table>
+      `,
+    });
+  };
   const statusLabel = {
     katildi: "Katildi",
     gelmedi: "Gelmedi",
@@ -1505,6 +1572,25 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Aylık PDF Rapor Satırı */}
+          <div style={{ ...S.card, borderRadius: 16, padding: "12px 16px", background: "#FAFBFF", border: "1px solid #D9E4F5" }}>
+            <div style={{ ...S.flexBetween, gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#4F4D49", marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.7 }}>Aylık Devamsızlık Raporu</div>
+                <div style={{ fontSize: 11.5, color: "#8A8A8E" }}>Seçilen aya ait tüm devamsızlık kaydını PDF olarak indirin</div>
+              </div>
+              <div style={{ ...S.flex(8), flexWrap: "wrap" }}>
+                <div>
+                  <label style={S.label}>Ay / Yıl</label>
+                  <input type="month" style={{ ...S.input, width: 160 }} value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
+                </div>
+                <button style={{ ...S.btn("blue"), marginTop: 20 }} onClick={generateMonthlyAttendanceReport}>
+                  <Icon name="download" size={14} /> PDF İndir
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div style={{ ...S.card, borderRadius: 16, padding: "14px 16px" }}>
             <div style={{ ...S.flexBetween, gap: 12, flexWrap: "wrap" }}>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1959,6 +2045,7 @@ export default function App() {
 function AuditPage({ attendance, tasks, users, depts }) {
   const getName = id => users.find(u => u.id === id)?.name || "—";
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
+  const [taskReportMonth, setTaskReportMonth] = useState(today().slice(0, 7));
 
   // Users with 3+ "gelmedi" absences
   const absenceCounts = {};
@@ -1976,6 +2063,62 @@ function AuditPage({ attendance, tasks, users, depts }) {
 
   // Tasks pending approval
   const pendingApproval = tasks.filter(t => t.status === "yapıldı");
+
+  const generateMonthlyTaskReport = () => {
+    const ml = monthLabel(taskReportMonth);
+    // Hem startDate hem endDate'e göre bu aya ait görevler
+    const monthTasks = tasks.filter(t => {
+      const d = t.endDate || t.startDate || "";
+      return d.slice(0, 7) === taskReportMonth;
+    });
+
+    const tamamlandi = monthTasks.filter(t => t.status === "tamamlandı");
+    const yapildi    = monthTasks.filter(t => t.status === "yapıldı");
+    const gecikmeli  = monthTasks.filter(t => t.status === "gecikmeli");
+    const devam      = monthTasks.filter(t => t.status === "devam");
+    const planlandi  = monthTasks.filter(t => t.status === "planlandı");
+
+    const taskRow = t =>
+      `<tr><td>${t.title}${t.desc ? `<div style="font-size:11px;color:#8A8A8E">${t.desc}</div>` : ""}</td>` +
+      `<td>${getDept(t.deptId)}</td>` +
+      `<td>${(Array.isArray(t.assignedTo) ? t.assignedTo : [t.assignedTo]).filter(Boolean).map(getName).join(", ")}</td>` +
+      `<td>${fmtDate(t.endDate || t.startDate)}</td>` +
+      `<td style="color:${t.status === "tamamlandı" ? "#30D158" : t.status === "gecikmeli" ? "#8B0000" : "#B98B2C"};font-weight:700">${{ tamamlandı: "Tamamlandı", yapıldı: "Teslim Edildi", gecikmeli: "Gecikmeli", devam: "Devam Ediyor", "planlandı": "Planlandı" }[t.status] || t.status}</td>` +
+      `${t.mazeretGecikme ? `<td style="font-style:italic;color:#636366;font-size:12px">${t.mazeretGecikme}</td>` : "<td>—</td>"}` +
+      `</tr>`;
+
+    const section = (emoji, title, list, showMazeret = false) =>
+      list.length === 0 ? "" :
+      `<h2>${emoji} ${title} (${list.length})</h2>
+      <table>
+        <tr style="background:#f7f3f2">
+          <td><b>Görev</b></td><td><b>Departman</b></td><td><b>Atananlar</b></td><td><b>Bitiş</b></td><td><b>Durum</b></td><td><b>${showMazeret ? "Gecikme Mazereti" : "Notlar"}</b></td>
+        </tr>
+        ${list.map(taskRow).join("")}
+      </table>`;
+
+    openPrintableReport({
+      title: `Görev Denetim Raporu — ${ml}`,
+      bodyHtml: `
+        <h1>Aylık Görev Denetim Raporu</h1>
+        <table>
+          <tr><td>Dönem</td><td><strong>${ml}</strong></td></tr>
+          <tr><td>Toplam Görev</td><td>${monthTasks.length}</td></tr>
+          <tr><td>Tamamlandı</td><td style="color:#30D158;font-weight:700">${tamamlandi.length}</td></tr>
+          <tr><td>Teslim Edildi (Onay Bekliyor)</td><td style="color:#B98B2C;font-weight:700">${yapildi.length}</td></tr>
+          <tr><td>Gecikmeli</td><td style="color:#8B0000;font-weight:700">${gecikmeli.length}</td></tr>
+          <tr><td>Devam Ediyor</td><td style="color:#1B1D22;font-weight:700">${devam.length}</td></tr>
+          <tr><td>Planlandı</td><td>${planlandi.length}</td></tr>
+          <tr><td>Tamamlanma Oranı</td><td style="font-weight:700">${monthTasks.length ? Math.round(((tamamlandi.length + yapildi.length) / monthTasks.length) * 100) : 0}%</td></tr>
+        </table>
+        ${section("✓", "Tamamlanan Görevler", tamamlandi)}
+        ${section("⏳", "Teslim Edildi — Onay Bekleyen", yapildi)}
+        ${section("⚠", "Gecikmeli Görevler", gecikmeli, true)}
+        ${section("▸", "Devam Eden Görevler", devam)}
+        ${section("·", "Planlandı", planlandi)}
+      `,
+    });
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2060,6 +2203,49 @@ function AuditPage({ attendance, tasks, users, depts }) {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* Aylık Görev Denetim Raporu Kartı */}
+      <div style={{ ...S.card, background: "#FAFBFF", border: "1px solid #D9E4F5" }}>
+        <div style={{ ...S.flexBetween, marginBottom: 14 }}>
+          <div>
+            <div style={{ ...S.cardTitle, marginBottom: 3, color: STOIC_NAVY }}>Aylık Görev Denetim Raporu</div>
+            <div style={{ fontSize: 12, color: "#8A8A8E" }}>Seçilen aya ait tüm görevleri PDF olarak indirin (tamamlanan, gecikmeli, devam eden)</div>
+          </div>
+          <div style={{ ...S.flex(8), flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <div>
+              <label style={S.label}>Ay / Yıl</label>
+              <input type="month" style={{ ...S.input, width: 160 }} value={taskReportMonth} onChange={e => setTaskReportMonth(e.target.value)} />
+            </div>
+            <button style={{ ...S.btn("blue"), marginTop: 20 }} onClick={generateMonthlyTaskReport}>
+              <Icon name="download" size={14} /> PDF İndir
+            </button>
+          </div>
+        </div>
+        {/* Özet istatistikler */}
+        {(() => {
+          const monthTasks = tasks.filter(t => {
+            const d = t.endDate || t.startDate || "";
+            return d.slice(0, 7) === taskReportMonth;
+          });
+          const ml = monthLabel(taskReportMonth);
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(100px,1fr))", gap: 10 }}>
+              {[
+                ["Toplam", monthTasks.length, STOIC_NAVY],
+                ["Tamamlandı", monthTasks.filter(t => t.status === "tamamlandı").length, "#30D158"],
+                ["Teslim Edildi", monthTasks.filter(t => t.status === "yapıldı").length, GOLD],
+                ["Gecikmeli", monthTasks.filter(t => t.status === "gecikmeli").length, ROMA_RED],
+                ["Devam Ediyor", monthTasks.filter(t => t.status === "devam").length, "#667085"],
+              ].map(([label, num, color]) => (
+                <div key={label} style={{ border: "1px solid #ECECEF", borderRadius: 12, padding: "9px 10px", background: "#fff", textAlign: "center" }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color }}>{num}</div>
+                  <div style={{ fontSize: 10.5, color: "#6B6B65" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
