@@ -30,6 +30,22 @@ const timeAgo = d => {
   return fmtDate(d);
 };
 
+// Firebase hata kodlarını Türkçe mesaja çevirir
+const firebaseErrTR = (e) => {
+  const code = e?.code || "";
+  if (code === "auth/email-already-in-use")    return "Bu e-posta adresi zaten kullanımda. Farklı bir e-posta deneyin.";
+  if (code === "auth/invalid-email")            return "Geçersiz e-posta adresi. Lütfen geçerli bir e-posta girin.";
+  if (code === "auth/weak-password")            return "Şifre çok zayıf. En az 6 karakter olmalıdır.";
+  if (code === "auth/user-not-found")           return "Kullanıcı bulunamadı.";
+  if (code === "auth/wrong-password")           return "Şifre hatalı.";
+  if (code === "auth/too-many-requests")        return "Çok fazla deneme yapıldı. Lütfen bir süre bekleyin.";
+  if (code === "auth/network-request-failed")  return "Ağ bağlantısı hatası. İnternet bağlantınızı kontrol edin.";
+  if (code === "auth/user-disabled")            return "Bu kullanıcı hesabı devre dışı bırakılmış.";
+  if (code === "auth/requires-recent-login")    return "Bu işlem için tekrar giriş yapmanız gerekiyor.";
+  if (code === "auth/invalid-credential")       return "Geçersiz e-posta veya şifre.";
+  return e?.message || "Bilinmeyen bir hata oluştu.";
+};
+
 const normalizeRole = (role) => {
   const r = String(role || "").trim().toLowerCase();
   if (["admin", "başkan", "yonetici", "yönetici"].includes(r)) return "Başkan";
@@ -1095,6 +1111,7 @@ function DepartmentsPage({ depts, tasks, meetings, users, userProfile }) {
 
 // ─── USERS ADMIN ──────────────────────────────────────────────────────────────
 function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
+  // currentUser kendi kendini silemez — deleteUser fonksiyonunda kontrol edilir
   const [modal, setModal] = useState(null);
   const [approveModal, setApproveModal] = useState(null);
   const [tab, setTab] = useState("users");
@@ -1107,13 +1124,15 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
   const createUser = async () => {
-    setLoading(true);
-    setErr("");
+    if (!modal.user.email?.trim()) { setErr("E-posta adresi zorunludur."); return; }
+    if (!modal.user.password || modal.user.password.length < 6) { setErr("Şifre en az 6 karakter olmalıdır."); return; }
+    if (!modal.user.name?.trim()) { setErr("İsim zorunludur."); return; }
+    setLoading(true); setErr("");
     try {
-      const cred = await createUserWithEmailAndPassword(auth, modal.user.email, modal.user.password);
+      const cred = await createUserWithEmailAndPassword(auth, modal.user.email.trim(), modal.user.password);
       await setDoc(doc(db, "users", cred.user.uid), {
-        name: modal.user.name,
-        email: modal.user.email,
+        name: modal.user.name.trim(),
+        email: modal.user.email.trim(),
         role: modal.user.role,
         deptId: modal.user.deptId || null,
         title: modal.user.title || "",
@@ -1122,9 +1141,16 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
       });
       setModal(null);
     } catch (e) {
-      setErr(e.message);
+      setErr(firebaseErrTR(e));
     }
     setLoading(false);
+  };
+
+  const deleteUser = async (u) => {
+    if (!window.confirm(`"${u.name}" adlı kullanıcıyı silmek istediğinizden emin misiniz?`)) return;
+    try {
+      await deleteDoc(doc(db, "users", u.id));
+    } catch (e) { alert("Silinemedi: " + firebaseErrTR(e)); }
   };
 
   const updateUser = async () => {
@@ -1150,7 +1176,7 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
       });
       await deleteDoc(doc(db, "registrations", reg.id));
       setApproveModal(null);
-    } catch (e) { setErr("Onaylama hatası: " + e.message); }
+    } catch (e) { setErr("Onaylama hatası: " + firebaseErrTR(e)); }
     setLoading(false);
   };
 
@@ -1214,7 +1240,14 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
               <td style={S.td}><span style={{ fontSize: 12.5, color: "#636366" }}>{u.title || "—"}</span></td>
               <td style={S.td}><span style={S.badge(ROLE_COLOR[u.role] || "#999")}>{displayRole(u.role)}</span></td>
               <td style={S.td}>{u.deptId ? getDept(u.deptId) : <span style={{ color: "#8A8A8E" }}>—</span>}</td>
-              <td style={S.td}><button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", user: { ...u } })}><Icon name="edit" size={13} /></button></td>
+              <td style={S.td}>
+                <div style={S.flex(5)}>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => setModal({ mode: "edit", user: { ...u } })}><Icon name="edit" size={13} /></button>
+                  {u.id !== currentUser?.uid && (
+                    <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: ROMA_RED }} onClick={() => deleteUser(u)} title="Kullanıcıyı sil"><Icon name="trash" size={13} /></button>
+                  )}
+                </div>
+              </td>
             </tr>
           ))}</tbody>
         </table>
@@ -2003,9 +2036,9 @@ export default function App() {
   const pendingMsgs = messages.filter(m => (m.toId === currentUser?.uid || m.toDeptId === userProfile?.deptId) && m.status === "bekliyor").length;
   const pendingRegs = hasSuperRole(userProfile?.role) ? registrations.filter(r => r.status === "bekliyor").length : 0;
 
-  if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yukleniyor...</div>;
+  if (authLoading) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Yükleniyor...</div>;
   if (!currentUser) return <LoginPage onLogin={u => setCurrentUser(u)} />;
-  if (!userProfile) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Profil yukleniyor...</div>;
+  if (!userProfile) return <div style={{ minHeight: "100vh", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A18", fontSize: 16 }}>Profil yükleniyor...</div>;
 
   const isDenetmen = isDenetmenRole(userProfile?.role);
   const canAudit = hasSuperRole(userProfile?.role) || isDenetmen;
@@ -2032,13 +2065,17 @@ export default function App() {
       // Departman Yöneticisi: kendi departmanı kapsamında
       return [
         genel,
-        { label: "Organizasyon", items: [{ id: "departments", label: "Departmanlar", icon: "users" }] },
+        { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }] },
         iletisim,
         { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }] },
       ];
     }
-    // Departman Üyesi
-    return [genel, iletisim];
+    // Departman Üyesi — yönetim ağacını görebilir
+    return [
+      genel,
+      { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }] },
+      iletisim,
+    ];
   })();
   const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli" };
   const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile, registrations };
@@ -2052,7 +2089,7 @@ export default function App() {
       case "tasks": return <TasksPage {...props} />;
       case "meetings": return <MeetingsPage {...props} />;
       case "attendance": return <AttendancePage {...props} />;
-      case "orgtree": return hasSuperRole(userProfile?.role) ? <OrgTreePage {...props} /> : noAccess;
+      case "orgtree": return <OrgTreePage {...props} />;
       case "departments": return <DepartmentsPage {...props} />;
       case "userlist": return hasSuperRole(userProfile?.role) ? <UsersPage {...props} /> : noAccess;
       case "messages": return <MessagesPage {...props} />;
@@ -2441,7 +2478,7 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
 
   const seedDemoData = async () => {
     if (!hasAdminRole(userProfile?.role)) {
-      alert("Ornek veri yuklemek icin Başkan yetkisi gerekir.");
+      alert("Örnek veri yüklemek için Başkan yetkisi gerekir.");
       return;
     }
 
@@ -2449,7 +2486,7 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
     try {
       const existingDemo = await getDocs(query(collection(db, "meetings"), where("demo", "==", true), limit(1)));
       if (!existingDemo.empty) {
-        alert("Ornek veriler zaten eklenmis.");
+        alert("Örnek veriler zaten eklenmiş.");
         setSeeding(false);
         return;
       }
@@ -2457,9 +2494,9 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       const deptPool = [...depts];
       if (deptPool.length < 3) {
         const demoDeptDefs = [
-          { name: "Operasyon", desc: "Saha planlama ve surec takibi" },
-          { name: "Iletisim", desc: "Uyeler ve paydaslarla iletisim" },
-          { name: "Finans", desc: "Butce, odeme ve kaynak yonetimi" },
+          { name: "Operasyon", desc: "Saha planlama ve süreç takibi" },
+          { name: "İletişim", desc: "Üyeler ve paydaşlarla iletişim" },
+          { name: "Finans", desc: "Bütçe, ödeme ve kaynak yönetimi" },
         ];
         for (const d of demoDeptDefs) {
           const ref = await addDoc(collection(db, "depts"), { ...d, demo: true });
@@ -2471,7 +2508,7 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       if (userPool.length < 4) {
         const demoUsers = [
           { id: "demo_u1", name: "Aylin Demir", email: "aylin.demo@marcus.local", role: "Departman Yöneticisi", deptId: deptPool[0]?.id || null, title: "Operasyon Sorumlusu", avatar: "AD", managerId: null, demo: true },
-          { id: "demo_u2", name: "Can Eren", email: "can.demo@marcus.local", role: "Departman Yöneticisi", deptId: deptPool[1]?.id || null, title: "Iletisim Yöneticisi", avatar: "CE", managerId: null, demo: true },
+          { id: "demo_u2", name: "Can Eren", email: "can.demo@marcus.local", role: "Departman Yöneticisi", deptId: deptPool[1]?.id || null, title: "İletişim Yöneticisi", avatar: "CE", managerId: null, demo: true },
           { id: "demo_u3", name: "Mina Kaya", email: "mina.demo@marcus.local", role: "Üye", deptId: deptPool[0]?.id || null, title: "Operasyon Analisti", avatar: "MK", managerId: "demo_u1", demo: true },
         ];
         for (const u of demoUsers) {
@@ -2487,14 +2524,14 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       const allUsers = userPool.filter(u => u.id !== actorId);
 
       const meetingA = await addDoc(collection(db, "meetings"), {
-        title: "Nisan Donemi Faaliyet Planlama",
+        title: "Nisan Dönemi Faaliyet Planlama",
         deptId: deptA,
         datetime: `${today()}T10:00`,
         participants: allUsers.slice(0, 3).map(u => u.id),
         status: "yapıldı",
         report: {
-          kararlar: "Aylik etkinlik takvimi onaylandi.",
-          aksiyonlar: "Sorumlu atamalari haftalik yapilacak.",
+          kararlar: "Aylık etkinlik takvimi onaylandı.",
+          aksiyonlar: "Sorumlu atamaları haftalık yapılacak.",
           attendedParticipantIds: allUsers.slice(0, 2).map(u => u.id),
         },
         createdAt: serverTimestamp(),
@@ -2502,7 +2539,7 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       });
 
       const meetingB = await addDoc(collection(db, "meetings"), {
-        title: "Bagisci Iliskileri Degerlendirme",
+        title: "Bağışçı İlişkileri Değerlendirme",
         deptId: deptB,
         datetime: `${today()}T14:30`,
         participants: allUsers.slice(1, 4).map(u => u.id),
@@ -2516,7 +2553,7 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       for (const participantId of allUsers.slice(0, 3).map(u => u.id)) {
         await setDoc(doc(db, "attendance", `${meetingA.id}_${participantId}`), {
           meetingId: meetingA.id,
-          meetingTitle: "Nisan Donemi Faaliyet Planlama",
+          meetingTitle: "Nisan Dönemi Faaliyet Planlama",
           userId: participantId,
           date: today(),
           deptId: deptA,
@@ -2529,28 +2566,28 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       }
 
       await addDoc(collection(db, "tasks"), {
-        title: "Haftalik uye geri bildirim raporu",
-        desc: "Departman bazli geri bildirimlerin siniflandirilmasi",
+        title: "Haftalık üye geri bildirim raporu",
+        desc: "Departman bazlı geri bildirimlerin sınıflandırılması",
         deptId: deptA,
         assignedTo: allUsers[0]?.id || actorId,
         startDate: today(),
         endDate: today(),
         progress: 65,
-        notes: "Demo gorev kaydi",
+        notes: "Demo görev kaydı",
         status: "devam",
         createdAt: serverTimestamp(),
         demo: true,
       });
 
       await addDoc(collection(db, "tasks"), {
-        title: "Nisan toplanti sunumu",
-        desc: "Yonetim ozeti ve KPI kartlari",
+        title: "Nisan toplantı sunumu",
+        desc: "Yönetim özeti ve KPI kartları",
         deptId: deptB,
         assignedTo: allUsers[1]?.id || actorId,
         startDate: today(),
         endDate: today(),
         progress: 25,
-        notes: "Demo gorev kaydi",
+        notes: "Demo görev kaydı",
         status: "planlandı",
         createdAt: serverTimestamp(),
         demo: true,
@@ -2558,8 +2595,8 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
 
       await addDoc(collection(db, "messages"), {
         type: "bilgi",
-        subject: "Faaliyet raporu guncellemesi",
-        body: "Nisan donemi verileri sisteme eklendi.",
+        subject: "Faaliyet raporu güncellemesi",
+        body: "Nisan dönemi verileri sisteme eklendi.",
         fromId: actorId,
         toDeptId: deptA,
         status: "yanıtlandı",
@@ -2569,8 +2606,8 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       });
 
       await addDoc(collection(db, "fileRequests"), {
-        subject: "Butce revizyon dosyasi",
-        desc: "Q2 butce tablolarinin paylasilmasi talep edilmistir.",
+        subject: "Bütçe revizyon dosyası",
+        desc: "Q2 bütçe tablolarının paylaşılması talep edilmiştir.",
         fromId: actorId,
         toDeptId: deptC,
         status: "bekliyor",
@@ -2580,10 +2617,10 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       });
 
       await updateDoc(doc(db, "meetings", meetingB.id), { demoLinked: true });
-      alert("Ornek veriler basariyla eklendi.");
+      alert("Örnek veriler başarıyla eklendi.");
     } catch (err) {
-      console.error("Ornek veri ekleme hatasi:", err);
-      alert("Ornek veriler eklenirken hata olustu.");
+      console.error("Örnek veri ekleme hatası:", err);
+      alert("Örnek veriler eklenirken hata oluştu.");
     }
     setSeeding(false);
   };
@@ -2591,14 +2628,14 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
   const printReport = m => {
     openPrintableReport({
       title: m.title,
-      bodyHtml: `<h1>Toplanti Raporu</h1><table><tr><td>Toplanti</td><td>${m.title}</td></tr><tr><td>Departman</td><td>${getDept(m.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(m.datetime)}</td></tr><tr><td>Katilimcilar</td><td>${(m.participants || []).map(getName).join(", ")}</td></tr></table><h2>Kararlar</h2><div class="box">${m.report?.kararlar || "-"}</div><h2>Aksiyonlar</h2><div class="box">${m.report?.aksiyonlar || "-"}</div>`,
+      bodyHtml: `<h1>Toplantı Raporu</h1><table><tr><td>Toplantı</td><td>${m.title}</td></tr><tr><td>Departman</td><td>${getDept(m.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(m.datetime)}</td></tr><tr><td>Katılımcılar</td><td>${(m.participants || []).map(getName).join(", ")}</td></tr></table><h2>Alınan Kararlar</h2><div class="box">${m.report?.kararlar || "-"}</div><h2>Aksiyon Maddeleri</h2><div class="box">${m.report?.aksiyonlar || "-"}</div>`,
     });
   };
   return (
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: "#6B6B65" }}>Rapor, toplanti, departman ve gorevler icin ornek veri ekleyebilirsiniz.</div>
-        <button style={S.btn("primary")} onClick={seedDemoData} disabled={seeding}>{seeding ? "Ekleniyor..." : "Ornek Veri Yukle"}</button>
+        <div style={{ fontSize: 13, color: "#6B6B65" }}>Rapor, toplantı, departman ve görevler için örnek veri ekleyebilirsiniz.</div>
+        <button style={S.btn("primary")} onClick={seedDemoData} disabled={seeding}>{seeding ? "Ekleniyor..." : "Örnek Veri Yükle"}</button>
       </div>
       <div style={S.grid3}>
         {[ ["Toplam", meetings.length, STOIC_NAVY], ["Raporlanan", done.length, "#30D158"], ["Bekleyen", meetings.length - done.length, GOLD] ].map(([label, num, color]) => (
