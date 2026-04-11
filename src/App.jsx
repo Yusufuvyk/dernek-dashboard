@@ -71,7 +71,7 @@ const displayRole = r => {
 };
 
 const openPrintableReport = ({ title, bodyHtml }) => {
-  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;padding:34px;font-size:13px;line-height:1.7;color:#1a1a18;}h1{font-size:20px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}td{padding:7px 10px;border:1px solid #d9d3d1;}td:first-child{font-weight:700;background:#f7f3f2;width:140px;}h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:70px;line-height:1.7;}ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
+  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>*{box-sizing:border-box;}body{font-family:'Segoe UI',Arial,sans-serif;padding:28px 34px;font-size:13px;line-height:1.7;color:#1a1a18;max-width:900px;margin:0 auto;}h1{font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}table{width:100%;border-collapse:collapse;margin-bottom:16px;table-layout:fixed;word-break:break-word;}td,th{padding:6px 9px;border:1px solid #d9d3d1;vertical-align:top;word-break:break-word;overflow-wrap:break-word;}td:first-child{font-weight:700;background:#f7f3f2;width:160px;}thead td,th{background:#f7f3f2;font-weight:700;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:60px;line-height:1.7;word-break:break-word;}ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}@media print{body{padding:14px;}}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const popup = window.open(url, "_blank", "noopener,noreferrer");
@@ -1436,6 +1436,7 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
     const base = roleRestrictedDept ? attendance.filter(r => r.deptId === roleRestrictedDept) : attendance;
     const monthRecords = base.filter(r => r.date && r.date.startsWith(reportMonth));
 
+    // Kişi bazlı gruplama
     const byUser = {};
     monthRecords.forEach(r => {
       if (!byUser[r.userId]) byUser[r.userId] = { name: getName(r.userId), dept: getDept(r.deptId), katildi: 0, gelmedi: 0, izinli: 0, records: [] };
@@ -1447,37 +1448,70 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
 
     const totKatildi = monthRecords.filter(r => r.status === "katildi").length;
     const totGelmedi = monthRecords.filter(r => r.status === "gelmedi").length;
-    const totIzinli = monthRecords.filter(r => r.status === "izinli").length;
+    const totIzinli  = monthRecords.filter(r => r.status === "izinli").length;
+    const katilimOrani = monthRecords.length ? Math.round((totKatildi / monthRecords.length) * 100) : 0;
 
-    const userRows = Object.values(byUser)
-      .sort((a, b) => b.gelmedi - a.gelmedi)
+    // Her kişi için ayrı kart
+    const personCards = Object.values(byUser)
+      .sort((a, b) => b.gelmedi + b.izinli - (a.gelmedi + a.izinli))
       .map(u => {
-        const detailRows = u.records
-          .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-          .map(r => `<tr style="background:#fafafa"><td style="padding-left:28px;color:#636366;font-size:12px">${r.meetingTitle || "Toplantı"}</td><td style="font-size:12px">${fmtDate(r.date)}</td><td style="font-size:12px;color:${r.status === "katildi" ? "#2A7A62" : r.status === "gelmedi" ? "#8B0000" : "#B98B2C"};font-weight:700">${r.status === "katildi" ? "Katıldı" : r.status === "gelmedi" ? "Gelmedi" : "İzinli"}</td><td style="font-size:11px;color:#636366;font-style:italic">${r.excuse || ""}</td></tr>`)
-          .join("");
-        return `<tr style="background:#fff"><td><strong>${u.name}</strong></td><td>${u.dept}</td><td style="color:#2A7A62;font-weight:700">${u.katildi}</td><td style="color:#8B0000;font-weight:700">${u.gelmedi}</td><td style="color:#B98B2C;font-weight:700">${u.izinli}</td><td>${u.katildi + u.gelmedi + u.izinli}</td></tr>${detailRows}`;
+        const absentRecords = u.records
+          .filter(r => r.status === "gelmedi" || r.status === "izinli")
+          .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+        const absentBlock = absentRecords.length === 0
+          ? `<p style="color:#2A7A62;font-size:12px;margin:6px 0 0">Bu dönemde devamsızlık kaydı bulunmamaktadır.</p>`
+          : `<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">
+               <tr style="background:#f0f0f0">
+                 <td style="padding:5px 8px;font-weight:700;width:22%">Tarih</td>
+                 <td style="padding:5px 8px;font-weight:700;width:28%">Toplantı</td>
+                 <td style="padding:5px 8px;font-weight:700;width:15%">Durum</td>
+                 <td style="padding:5px 8px;font-weight:700;width:35%">Mazeret</td>
+               </tr>
+               ${absentRecords.map(r => `
+                 <tr style="border-bottom:1px solid #e8e8e8;vertical-align:top">
+                   <td style="padding:6px 8px;color:#444">${fmtDate(r.date)}</td>
+                   <td style="padding:6px 8px;word-break:break-word">${r.meetingTitle || "Toplantı"}</td>
+                   <td style="padding:6px 8px;font-weight:700;color:${r.status === "gelmedi" ? "#8B0000" : "#B98B2C"}">${r.status === "gelmedi" ? "Gelmedi" : "İzinli"}</td>
+                   <td style="padding:6px 8px;color:#555;word-break:break-word;white-space:pre-wrap">${r.excuse || "<span style='color:#aaa;font-style:italic'>Mazeret girilmemiş</span>"}</td>
+                 </tr>`).join("")}
+             </table>`;
+
+        const statusColor = (u.gelmedi >= 3) ? "#8B0000" : (u.gelmedi > 0 || u.izinli > 0) ? "#B98B2C" : "#2A7A62";
+        return `
+          <div style="border:1px solid #ddd;border-radius:8px;padding:14px 16px;margin-bottom:16px;page-break-inside:avoid;break-inside:avoid">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div>
+                <span style="font-size:14px;font-weight:700;color:#1a1a1a">${u.name}</span>
+                <span style="font-size:12px;color:#667085;margin-left:8px">${u.dept}</span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                <span style="background:#e8f5e9;color:#2A7A62;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">✓ Katıldı: ${u.katildi}</span>
+                ${u.gelmedi > 0 ? `<span style="background:#fde8e8;color:#8B0000;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">✗ Gelmedi: ${u.gelmedi}</span>` : ""}
+                ${u.izinli > 0  ? `<span style="background:#fef3cd;color:#8A6000;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">~ İzinli: ${u.izinli}</span>` : ""}
+                <span style="background:#f0f0f0;color:#444;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">Toplam: ${u.katildi + u.gelmedi + u.izinli}</span>
+              </div>
+            </div>
+            ${u.gelmedi >= 3 ? `<div style="background:#fde8e8;border-left:3px solid #8B0000;padding:4px 10px;font-size:11px;color:#8B0000;font-weight:700;margin-bottom:6px">⚠ Devamsızlık uyarısı: ${u.gelmedi} kez gelmedi</div>` : ""}
+            ${absentBlock}
+          </div>`;
       }).join("");
 
-    openPrintableReport({
-      title: `Devamsızlık Raporu — ${ml}`,
-      bodyHtml: `
-        <h1>Aylık Devamsızlık Denetim Raporu</h1>
-        <table>
-          <tr><td>Dönem</td><td><strong>${ml}</strong></td></tr>
-          <tr><td>Toplam Kayıt</td><td>${monthRecords.length}</td></tr>
-          <tr><td>Toplam Katıldı</td><td style="color:#2A7A62;font-weight:700">${totKatildi}</td></tr>
-          <tr><td>Toplam Gelmedi</td><td style="color:#8B0000;font-weight:700">${totGelmedi}</td></tr>
-          <tr><td>Toplam İzinli</td><td style="color:#B98B2C;font-weight:700">${totIzinli}</td></tr>
-          <tr><td>Katılım Oranı</td><td style="font-weight:700">${monthRecords.length ? Math.round((totKatildi / monthRecords.length) * 100) : 0}%</td></tr>
-        </table>
-        <h2>Kişi Bazlı Özet</h2>
-        <table>
-          <tr style="background:#f7f3f2"><td><b>Kişi</b></td><td><b>Departman</b></td><td><b>Katıldı</b></td><td><b>Gelmedi</b></td><td><b>İzinli</b></td><td><b>Toplam</b></td></tr>
-          ${userRows || "<tr><td colspan='6' style='text-align:center;color:#8A8A8E'>Bu dönemde kayıt bulunamadı</td></tr>"}
-        </table>
-      `,
-    });
+    const html = `
+      <h1>Aylık Devamsızlık Denetim Raporu</h1>
+      <table style="margin-bottom:20px">
+        <tr><td>Dönem</td><td><strong>${ml}</strong></td></tr>
+        <tr><td>Toplam Kayıt</td><td>${monthRecords.length}</td></tr>
+        <tr><td>Toplam Katıldı</td><td style="color:#2A7A62;font-weight:700">${totKatildi}</td></tr>
+        <tr><td>Toplam Gelmedi</td><td style="color:#8B0000;font-weight:700">${totGelmedi}</td></tr>
+        <tr><td>Toplam İzinli</td><td style="color:#B98B2C;font-weight:700">${totIzinli}</td></tr>
+        <tr><td>Katılım Oranı</td><td style="font-weight:700">${katilimOrani}%</td></tr>
+      </table>
+      <h2>Kişi Bazlı Devamsızlık Detayı</h2>
+      ${personCards || "<p style='color:#8A8A8E;text-align:center'>Bu dönemde kayıt bulunamadı.</p>"}
+    `;
+
+    openPrintableReport({ title: `Devamsızlık Raporu — ${ml}`, bodyHtml: html });
   };
   const statusLabel = {
     katildi: "Katildi",
@@ -1635,7 +1669,7 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
                       <td style={S.td}>
                         <span style={S.badge(status === "katildi" ? "#2A7A62" : status === "gelmedi" ? ROMA_RED : status === "izinli" ? GOLD : "#8A8A8E")}>{statusLabel[status] || "—"}</span>
                       </td>
-                      <td style={{ ...S.td, maxWidth: 220, color: "#66645F" }}>{r.excuse || "—"}</td>
+                      <td style={{ ...S.td, maxWidth: 260, color: "#66645F", wordBreak: "break-word", whiteSpace: "normal", lineHeight: 1.5 }}>{r.excuse || "—"}</td>
                       <td style={S.td}><span style={S.tag}>{r.source === "meeting-report" ? "Toplanti" : "Manuel"}</span></td>
                     </tr>
                   );
