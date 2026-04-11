@@ -340,8 +340,52 @@ function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, curr
   const getName = id => users.find(u => u.id === id)?.name || "—";
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
 
+  // Yaklaşan toplantılar: sadece planlandı + gelecekte + kullanıcıya ait
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 86400000);
+
+  const myUpcomingMeetings = meetings
+    .filter(m => {
+      if (m.status !== "planlandı") return false;
+      const mDate = new Date(m.datetime);
+      if (mDate <= now) return false;
+      if (hasAdminRole(userProfile?.role)) return true;
+      return m.participants?.includes(currentUser?.uid) || m.deptId === userProfile?.deptId;
+    })
+    .sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+  const todayMeetings = myUpcomingMeetings.filter(m => {
+    const d = new Date(m.datetime);
+    return d >= todayStart && d < todayEnd;
+  });
+
+  const minutesUntilNext = myUpcomingMeetings.length > 0
+    ? Math.round((new Date(myUpcomingMeetings[0].datetime) - now) / 60000)
+    : null;
+
   return (
     <div>
+      {/* Bugün toplantı bildirimi */}
+      {todayMeetings.length > 0 && (
+        <div style={{ background: "#FFF8E1", border: "1px solid #F9C74F", borderRadius: 10, padding: "11px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>📅</span>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#7A5C00" }}>
+              Bugün {todayMeetings.length} toplantınız var!
+            </span>
+            <div style={{ fontSize: 12, color: "#8A6A16", marginTop: 2 }}>
+              {todayMeetings.map(m => `${m.title} — ${fmtDateTime(m.datetime)}`).join(" · ")}
+            </div>
+          </div>
+          {minutesUntilNext !== null && minutesUntilNext <= 60 && (
+            <span style={{ ...S.badge(ROMA_RED), fontSize: 11, whiteSpace: "nowrap" }}>
+              {minutesUntilNext < 1 ? "Şimdi başlıyor!" : `${minutesUntilNext} dk sonra`}
+            </span>
+          )}
+        </div>
+      )}
+
       <div style={S.grid3}>
         {[["Toplam Görev", mine.length, STOIC_NAVY], ["Tamamlandı", mine.filter(t => t.status === "tamamlandı").length, "#30D158"], ["Bekleyen Mesaj", pendingMsgs, GOLD]].map(([label, num, color]) => (
           <div key={label} style={S.stat(color)}>
@@ -385,6 +429,37 @@ function Dashboard({ tasks, meetings, depts, users, messages, fileRequests, curr
           {messages.length === 0 && <div style={S.empty}>Henüz mesaj yok</div>}
         </div>
       </div>
+      <div style={{ height: 16 }} />
+
+      {/* Yaklaşan Toplantılar Kartı */}
+      <div style={S.card}>
+        <div style={S.cardTitle}>Yaklaşan Toplantılar</div>
+        {myUpcomingMeetings.length === 0 ? (
+          <div style={S.empty}>Yaklaşan toplantı yok</div>
+        ) : (
+          <table style={S.table}>
+            <thead><tr>{["Toplantı", "Departman", "Tarih / Saat", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>{myUpcomingMeetings.slice(0, 5).map(m => {
+              const mDate = new Date(m.datetime);
+              const diffMin = Math.round((mDate - now) / 60000);
+              const diffLabel = diffMin < 60
+                ? <span style={S.badge(ROMA_RED)}>{diffMin < 1 ? "Şimdi!" : `${diffMin}dk`}</span>
+                : diffMin < 1440
+                ? <span style={S.badge(GOLD)}>{Math.round(diffMin / 60)}sa</span>
+                : <span style={S.badge(STOIC_NAVY)}>{Math.round(diffMin / 1440)}g</span>;
+              return (
+                <tr key={m.id}>
+                  <td style={S.td}><strong>{m.title}</strong></td>
+                  <td style={S.td}><span style={S.tag}>{getDept(m.deptId)}</span></td>
+                  <td style={S.td}>{fmtDateTime(m.datetime)}</td>
+                  <td style={S.td}>{diffLabel}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        )}
+      </div>
+
       <div style={{ height: 16 }} />
       <div style={S.card}>
         <div style={S.cardTitle}>Son Görevler</div>
@@ -503,6 +578,7 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
 
 function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(task);
+  const [userSearch, setUserSearch] = useState("");
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const isEdit = mode === "edit";
   // Dept Yöneticisi sadece kendi departmanını görebilir
@@ -516,6 +592,10 @@ function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
     set("assignedTo", updated);
   };
 
+  const filteredUsers = userSearch.trim()
+    ? users.filter(u => u.name?.toLowerCase().includes(userSearch.toLowerCase()))
+    : users;
+
   return (
     <Modal title={isEdit ? "Görevi Düzenle" : "Yeni Görev"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
@@ -525,17 +605,29 @@ function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
         <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
 
         <div>
-          <label style={S.label}>Atananlar</label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
-            {users.map(u => {
+          <div style={{ ...S.flexBetween, marginBottom: 6 }}>
+            <label style={{ ...S.label, marginBottom: 0 }}>
+              Atananlar
+              {(() => { const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean); return arr.length > 0 ? <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{arr.length} seçili</span> : null; })()}
+            </label>
+            <input
+              style={{ ...S.input, width: 160, padding: "5px 10px", fontSize: 12 }}
+              placeholder="Kişi ara…"
+              value={userSearch}
+              onChange={e => setUserSearch(e.target.value)}
+            />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, maxHeight: 140, overflowY: "auto", padding: "2px 0" }}>
+            {filteredUsers.map(u => {
               const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
               const isSelected = arr.includes(u.id);
               return (
-                <div key={u.id} onClick={() => toggleUser(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E" }}>
+                <div key={u.id} onClick={() => toggleUser(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
                   {u.name}
                 </div>
               );
             })}
+            {filteredUsers.length === 0 && <div style={{ fontSize: 12, color: "#8A8A8E" }}>Sonuç bulunamadı</div>}
           </div>
         </div>
 
@@ -589,16 +681,29 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
   const emptyM = { title: "", deptId: defaultDeptId, datetime: new Date().toISOString().slice(0, 16), participants: [], status: "planlandı", report: null };
 
   const save = async m => {
-    if (modal.mode === "add") await addDoc(collection(db, "meetings"), { ...m, createdAt: serverTimestamp() });
-    else await updateDoc(doc(db, "meetings", m.id), m);
+    try {
+      if (modal.mode === "add") {
+        await addDoc(collection(db, "meetings"), { ...m, createdAt: serverTimestamp() });
+      } else {
+        const { id, createdAt, ...updateData } = m;
+        await updateDoc(doc(db, "meetings", id), updateData);
+      }
+    } catch (e) {
+      console.error("Toplantı kaydedilemedi:", e);
+      alert("Kayıt sırasında hata oluştu: " + e.message);
+    }
     setModal(null);
   };
   const saveExcuse = async (meetingId, reason) => {
     const meeting = meetings.find(m => m.id === meetingId);
     if (!meeting) return;
-    const excuses = meeting.excuses || {};
-    excuses[currentUser.uid] = reason;
-    await updateDoc(doc(db, "meetings", meetingId), { excuses });
+    try {
+      const excuses = { ...(meeting.excuses || {}), [currentUser.uid]: reason };
+      await updateDoc(doc(db, "meetings", meetingId), { excuses });
+    } catch (e) {
+      console.error("İzin kaydedilemedi:", e);
+      alert("Kayıt sırasında hata oluştu: " + e.message);
+    }
     setExcuseModal(null);
   };
   const del = async id => await deleteDoc(doc(db, "meetings", id));
@@ -634,7 +739,12 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
       }, { merge: true });
     });
 
-    await Promise.all(attendanceWrites);
+    try {
+      await Promise.all(attendanceWrites);
+    } catch (e) {
+      console.error("Rapor kaydedilemedi:", e);
+      alert("Kayıt sırasında hata oluştu: " + e.message);
+    }
     setReportModal(null);
   };
   const getName = id => users.find(u => u.id === id)?.name || "—";
@@ -696,27 +806,78 @@ function ExcuseModal({ meeting, onSave, onClose }) {
 
 function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(meeting);
+  const [userSearch, setUserSearch] = useState("");
+  const [dtError, setDtError] = useState("");
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const toggleP = id => set("participants", f.participants.includes(id) ? f.participants.filter(x => x !== id) : [...f.participants, id]);
+  const toggleP = id => set("participants", (f.participants || []).includes(id) ? f.participants.filter(x => x !== id) : [...(f.participants || []), id]);
   const visibleDepts = hasSuperRole(userProfile?.role)
     ? depts
     : depts.filter(d => d.id === userProfile?.deptId);
+
+  // Minimum seçilebilir tarih/saat = şu an (sadece yeni toplantılarda)
+  const nowLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+  const filteredUsers = userSearch.trim()
+    ? users.filter(u => u.name?.toLowerCase().includes(userSearch.toLowerCase()))
+    : users;
+
+  const handleSave = () => {
+    if (mode === "add" && f.datetime && new Date(f.datetime) <= new Date()) {
+      setDtError("Geçmiş bir tarih/saat seçemezsiniz. Lütfen gelecekteki bir zaman seçin.");
+      return;
+    }
+    setDtError("");
+    onSave(f);
+  };
+
   return (
     <Modal title={mode === "add" ? "Yeni Toplantı" : "Toplantı Düzenle"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
         <div><label style={S.label}>Başlık</label><input style={S.input} value={f.title} onChange={e => set("title", e.target.value)} /></div>
         <div style={S.formRow}>
           <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-          <div><label style={S.label}>Tarih & Saat</label><input type="datetime-local" style={S.input} value={f.datetime} onChange={e => set("datetime", e.target.value)} /></div>
-        </div>
-        <div><label style={S.label}>Katılımcılar</label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
-            {users.map(u => <div key={u.id} onClick={() => toggleP(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: f.participants.includes(u.id) ? "#1C1C1E" : "#F2F2F7", color: f.participants.includes(u.id) ? "#fff" : "#1C1C1E" }}>{u.name}</div>)}
+          <div>
+            <label style={S.label}>Tarih & Saat</label>
+            <input
+              type="datetime-local"
+              style={{ ...S.input, borderColor: dtError ? ROMA_RED : undefined }}
+              value={f.datetime}
+              min={mode === "add" ? nowLocal : undefined}
+              onChange={e => { set("datetime", e.target.value); setDtError(""); }}
+            />
           </div>
         </div>
+        {dtError && <div style={{ fontSize: 12, color: ROMA_RED, background: "#FFF0F0", borderRadius: 7, padding: "7px 10px", marginTop: -6 }}>{dtError}</div>}
+
+        <div>
+          <div style={{ ...S.flexBetween, marginBottom: 6 }}>
+            <label style={{ ...S.label, marginBottom: 0 }}>
+              Katılımcılar
+              {(f.participants || []).length > 0 && <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{f.participants.length} seçili</span>}
+            </label>
+            <input
+              style={{ ...S.input, width: 160, padding: "5px 10px", fontSize: 12 }}
+              placeholder="Kişi ara…"
+              value={userSearch}
+              onChange={e => setUserSearch(e.target.value)}
+            />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, maxHeight: 140, overflowY: "auto", padding: "2px 0" }}>
+            {filteredUsers.map(u => {
+              const isSelected = (f.participants || []).includes(u.id);
+              return (
+                <div key={u.id} onClick={() => toggleP(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
+                  {u.name}
+                </div>
+              );
+            })}
+            {filteredUsers.length === 0 && <div style={{ fontSize: 12, color: "#8A8A8E" }}>Sonuç bulunamadı</div>}
+          </div>
+        </div>
+
         <div style={{ ...S.flex(10), justifyContent: "flex-end" }}>
           <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
-          <button style={S.btn()} onClick={() => onSave(f)}>Kaydet</button>
+          <button style={S.btn()} onClick={handleSave}>Kaydet</button>
         </div>
       </div>
     </Modal>
