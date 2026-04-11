@@ -1148,23 +1148,14 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
 
   const deleteUser = async (u) => {
     if (!window.confirm(
-      `"${u.name}" adlı kullanıcıyı tamamen silmek istiyor musunuz?\n\n` +
-      `• Profil silinir\n• Tüm devamsızlık kayıtları silinir\n• Hesap kara listeye alınır (tekrar giriş yapamaz)`
+      `"${u.name}" adlı kullanıcıyı silmek istiyor musunuz?\n\n` +
+      `• Profil silinir\n• Tüm devamsızlık kayıtları silinir\n• Tekrar giriş yapamaz`
     )) return;
     try {
-      // 1. Firestore kullanıcı profilini sil
+      // 1. Firestore profilini sil (bu yeterli: profil yoksa app anında signOut yapar)
       await deleteDoc(doc(db, "users", u.id));
 
-      // 2. Kara listeye ekle — e-posta + uid ile engellenir
-      await setDoc(doc(db, "deletedUsers", u.id), {
-        uid: u.id,
-        email: (u.email || "").toLowerCase(),
-        name: u.name || "",
-        deletedAt: serverTimestamp(),
-        deletedBy: currentUser?.uid || null,
-      });
-
-      // 3. Devamsızlık kayıtlarını sil
+      // 2. Devamsızlık kayıtlarını sil
       const attSnap = await getDocs(query(collection(db, "attendance"), where("userId", "==", u.id)));
       await Promise.all(attSnap.docs.map(d => deleteDoc(d.ref)));
 
@@ -1964,33 +1955,9 @@ export default function App() {
   const [attendance, setAttendance] = useState([]);
   const [registrations, setRegistrations] = useState([]);
 
-  // Auth listener — silinen kullanıcılar kara listede kontrol edilir
+  // Auth listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async user => {
-      if (user) {
-        try {
-          // UID ile kara liste kontrolü
-          const delSnap = await getDoc(doc(db, "deletedUsers", user.uid));
-          if (delSnap.exists()) {
-            await signOut(auth);
-            setCurrentUser(null);
-            setAuthLoading(false);
-            return;
-          }
-          // E-posta ile kara liste kontrolü
-          if (user.email) {
-            const delByEmail = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", user.email.toLowerCase()), limit(1)));
-            if (!delByEmail.empty) {
-              await signOut(auth);
-              setCurrentUser(null);
-              setAuthLoading(false);
-              return;
-            }
-          }
-        } catch (err) {
-          console.error("Kara liste kontrolü başarısız:", err);
-        }
-      }
+    const unsub = onAuthStateChanged(auth, user => {
       setCurrentUser(user);
       setAuthLoading(false);
     });
@@ -2005,67 +1972,36 @@ export default function App() {
       if (snap.exists()) {
         const data = snap.data();
         let normalizedRole = normalizeRole(data.role);
-
-        // Otomatik olarak Yusuf'u Başkan yap
         if (data.email === "yusufuveyik@gmail.com" && normalizedRole !== "Başkan") {
           normalizedRole = "Başkan";
           await updateDoc(userRef, { role: "Başkan", title: "Başkan" });
         }
-
         setUserProfile({ id: snap.id, ...data, role: normalizedRole });
         return;
       }
 
-      // Kara liste: bu kullanıcı silinmiş mi?
+      // Profil bulunamadı — sisteme erişim hakkı yok mu, yoksa ilk kurulum mu?
       try {
-        const delSnap = await getDoc(doc(db, "deletedUsers", currentUser.uid));
-        if (delSnap.exists()) { await signOut(auth); return; }
-        if (currentUser.email) {
-          const delByEmail = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", currentUser.email.toLowerCase()), limit(1)));
-          if (!delByEmail.empty) { await signOut(auth); return; }
+        const existing = await getDocs(query(collection(db, "users"), limit(1)));
+        if (!existing.empty) {
+          // Sistemde başka kullanıcılar var ama bu kişinin profili yok:
+          // silinmiş, onaylanmamış veya yetkisiz → anında çıkış yap, yeni profil oluşturma
+          await signOut(auth);
+          return;
         }
-      } catch (_) {}
-
-      // If UID changed, try to recover existing profile by email automatically.
-      if (currentUser.email) {
-        try {
-          const byEmail = await getDocs(query(collection(db, "users"), where("email", "==", currentUser.email), limit(1)));
-          if (!byEmail.empty) {
-            const legacyData = byEmail.docs[0].data();
-            const normalizedRole = normalizeRole(legacyData.role);
-            await setDoc(userRef, {
-              ...legacyData,
-              email: currentUser.email,
-              role: normalizedRole,
-              migratedFromUidChange: true,
-            }, { merge: true });
-            return;
-          }
-        } catch (err) {
-          console.error("E-posta ile profil geri yükleme başarısız:", err);
-        }
-      }
-
-      // Bootstrap profile automatically: first user becomes Admin.
-      try {
-        const firstUserSnap = await getDocs(query(collection(db, "users"), limit(1)));
-        const role = firstUserSnap.empty ? "Başkan" : "Üye";
+        // Sistemde hiç kullanıcı yok → ilk kurulum, Başkan olarak bootstrap yap
         const fallbackName = (currentUser.email || "Kullanici").split("@")[0];
         const name = currentUser.displayName || fallbackName;
-
         await setDoc(userRef, {
-          name,
-          email: currentUser.email || "",
-          role,
-          deptId: null,
-          title: role === "Başkan" ? "Yönetici" : "",
+          name, email: currentUser.email || "", role: "Başkan",
+          deptId: null, title: "Yönetici",
           avatar: name.slice(0, 2).toUpperCase(),
-          managerId: null,
-          createdAt: serverTimestamp(),
-          autoCreated: true,
+          managerId: null, createdAt: serverTimestamp(), autoCreated: true,
         });
       } catch (err) {
-        console.error("Kullanici profili olusturulamadi:", err);
+        // Hata olursa güvenli taraf: çıkış yap
+        console.error("Profil kontrol hatası:", err);
+        await signOut(auth);
       }
     });
     return unsub;
