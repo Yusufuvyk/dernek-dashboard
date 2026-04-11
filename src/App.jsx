@@ -1147,10 +1147,30 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
   };
 
   const deleteUser = async (u) => {
-    if (!window.confirm(`"${u.name}" adlı kullanıcıyı silmek istediğinizden emin misiniz?`)) return;
+    if (!window.confirm(
+      `"${u.name}" adlı kullanıcıyı tamamen silmek istiyor musunuz?\n\n` +
+      `• Profil silinir\n• Tüm devamsızlık kayıtları silinir\n• Hesap kara listeye alınır (tekrar giriş yapamaz)`
+    )) return;
     try {
+      // 1. Firestore kullanıcı profilini sil
       await deleteDoc(doc(db, "users", u.id));
-    } catch (e) { alert("Silinemedi: " + firebaseErrTR(e)); }
+
+      // 2. Kara listeye ekle — e-posta + uid ile engellenir
+      await setDoc(doc(db, "deletedUsers", u.id), {
+        uid: u.id,
+        email: (u.email || "").toLowerCase(),
+        name: u.name || "",
+        deletedAt: serverTimestamp(),
+        deletedBy: currentUser?.uid || null,
+      });
+
+      // 3. Devamsızlık kayıtlarını sil
+      const attSnap = await getDocs(query(collection(db, "attendance"), where("userId", "==", u.id)));
+      await Promise.all(attSnap.docs.map(d => deleteDoc(d.ref)));
+
+    } catch (e) {
+      alert("Silinemedi: " + firebaseErrTR(e));
+    }
   };
 
   const updateUser = async () => {
@@ -1944,9 +1964,33 @@ export default function App() {
   const [attendance, setAttendance] = useState([]);
   const [registrations, setRegistrations] = useState([]);
 
-  // Auth listener
+  // Auth listener — silinen kullanıcılar kara listede kontrol edilir
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async user => {
+      if (user) {
+        try {
+          // UID ile kara liste kontrolü
+          const delSnap = await getDoc(doc(db, "deletedUsers", user.uid));
+          if (delSnap.exists()) {
+            await signOut(auth);
+            setCurrentUser(null);
+            setAuthLoading(false);
+            return;
+          }
+          // E-posta ile kara liste kontrolü
+          if (user.email) {
+            const delByEmail = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", user.email.toLowerCase()), limit(1)));
+            if (!delByEmail.empty) {
+              await signOut(auth);
+              setCurrentUser(null);
+              setAuthLoading(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Kara liste kontrolü başarısız:", err);
+        }
+      }
       setCurrentUser(user);
       setAuthLoading(false);
     });
@@ -1972,6 +2016,16 @@ export default function App() {
         return;
       }
 
+      // Kara liste: bu kullanıcı silinmiş mi?
+      try {
+        const delSnap = await getDoc(doc(db, "deletedUsers", currentUser.uid));
+        if (delSnap.exists()) { await signOut(auth); return; }
+        if (currentUser.email) {
+          const delByEmail = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", currentUser.email.toLowerCase()), limit(1)));
+          if (!delByEmail.empty) { await signOut(auth); return; }
+        }
+      } catch (_) {}
+
       // If UID changed, try to recover existing profile by email automatically.
       if (currentUser.email) {
         try {
@@ -1988,7 +2042,7 @@ export default function App() {
             return;
           }
         } catch (err) {
-          console.error("E-posta ile profil geri yukleme basarisiz:", err);
+          console.error("E-posta ile profil geri yükleme başarısız:", err);
         }
       }
 
