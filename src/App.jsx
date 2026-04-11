@@ -71,16 +71,52 @@ const displayRole = r => {
 };
 
 const openPrintableReport = ({ title, bodyHtml }) => {
-  const html = `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><title>${title}</title><style>*{box-sizing:border-box;}body{font-family:'Segoe UI',Arial,sans-serif;padding:28px 34px;font-size:13px;line-height:1.7;color:#1a1a18;max-width:900px;margin:0 auto;}h1{font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}table{width:100%;border-collapse:collapse;margin-bottom:16px;table-layout:fixed;word-break:break-word;}td,th{padding:6px 9px;border:1px solid #d9d3d1;vertical-align:top;word-break:break-word;overflow-wrap:break-word;}td:first-child{font-weight:700;background:#f7f3f2;width:160px;}thead td,th{background:#f7f3f2;font-weight:700;}.box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:60px;line-height:1.7;word-break:break-word;}ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}@media print{body{padding:14px;}}</style></head><body>${bodyHtml}<script>window.onload=()=>window.print();<\/script></body></html>`;
+  // Türkçe karakter desteği için Google Fonts ve UTF-8 meta eklendi.
+  // @media screen body gizlenir → kullanıcı HTML görmez, direkt Yazdır/PDF diyaloğu açılır.
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap');
+    *{box-sizing:border-box;}
+    @media screen{body{visibility:hidden;overflow:hidden;margin:0;}}
+    @media print{body{visibility:visible;}}
+    body{font-family:'Noto Sans','Segoe UI',Arial,sans-serif;padding:28px 34px;font-size:13px;line-height:1.75;color:#1a1a18;max-width:900px;margin:0 auto;}
+    h1{font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:8px;margin-bottom:18px;color:#151515;}
+    h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6a5610;margin:20px 0 8px;}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px;table-layout:fixed;word-break:break-word;}
+    td,th{padding:6px 9px;border:1px solid #d9d3d1;vertical-align:top;word-break:break-word;overflow-wrap:break-word;}
+    td:first-child{font-weight:700;background:#f7f3f2;width:160px;}
+    thead td,th{background:#f7f3f2 !important;font-weight:700;}
+    .box{border:1px solid #d9d3d1;border-radius:6px;padding:12px;min-height:60px;line-height:1.75;word-break:break-word;}
+    ul,ol{margin:6px 0;padding-left:22px;}li{margin-bottom:2px;}
+    @media print{body{padding:12px;}@page{margin:1.2cm;}}
+  `;
+  const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+  <title>${title}</title>
+  <style>${css}</style>
+</head>
+<body>
+${bodyHtml}
+<script>
+  window.onload = function() {
+    window.focus();
+    window.print();
+    setTimeout(function(){ window.close(); }, 800);
+  };
+<\/script>
+</body>
+</html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  const popup = window.open(url, "_blank", "width=900,height=700,noopener");
   if (!popup) {
     URL.revokeObjectURL(url);
-    alert("Rapor penceresi acilamadi. Lutfen popup engelleyiciyi kapatin.");
+    alert("Yazdır penceresi açılamadı. Lütfen tarayıcının popup engelleyicisini kapatın.");
     return;
   }
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
 };
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -716,7 +752,9 @@ function MeetingsPage({ meetings, depts, users, currentUser, userProfile }) {
     if (!meeting) return;
     try {
       const excuses = { ...(meeting.excuses || {}), [currentUser.uid]: reason };
-      await updateDoc(doc(db, "meetings", meetingId), { excuses });
+      // Yeni mazeret → denetim panelinde "bekliyor" olarak görünsün
+      const excuseStatuses = { ...(meeting.excuseStatuses || {}), [currentUser.uid]: "bekliyor" };
+      await updateDoc(doc(db, "meetings", meetingId), { excuses, excuseStatuses });
     } catch (e) {
       console.error("İzin kaydedilemedi:", e);
       alert("Kayıt sırasında hata oluştu: " + e.message);
@@ -2076,7 +2114,7 @@ export default function App() {
 }
 
 // ─── AUDIT ───────────────────────────────────────────────────────────────────
-function AuditPage({ attendance, tasks, users, depts }) {
+function AuditPage({ attendance, tasks, users, depts, meetings, currentUser }) {
   const getName = id => users.find(u => u.id === id)?.name || "—";
   const getDept = id => depts.find(d => d.id === id)?.name || "—";
   const [taskReportMonth, setTaskReportMonth] = useState(today().slice(0, 7));
@@ -2097,6 +2135,47 @@ function AuditPage({ attendance, tasks, users, depts }) {
 
   // Tasks pending approval
   const pendingApproval = tasks.filter(t => t.status === "yapıldı");
+
+  // Bekleyen mazaretler — tüm toplantılardan topla
+  const pendingExcuses = [];
+  (meetings || []).forEach(m => {
+    const excuses = m.excuses || {};
+    const statuses = m.excuseStatuses || {};
+    Object.entries(excuses).forEach(([userId, reason]) => {
+      const st = statuses[userId] || "bekliyor";
+      pendingExcuses.push({
+        meetingId: m.id, meetingTitle: m.title, meetingDate: m.datetime,
+        deptId: m.deptId, userId, reason, status: st,
+      });
+    });
+  });
+  const bekleyenExcuses = pendingExcuses.filter(e => e.status === "bekliyor");
+
+  const approveExcuse = async (ex) => {
+    const meeting = (meetings || []).find(m => m.id === ex.meetingId);
+    if (!meeting) return;
+    try {
+      const excuseStatuses = { ...(meeting.excuseStatuses || {}), [ex.userId]: "onaylı" };
+      await updateDoc(doc(db, "meetings", ex.meetingId), { excuseStatuses });
+      // Devamsızlık kaydını izinli olarak güncelle
+      await setDoc(doc(db, "attendance", `${ex.meetingId}_${ex.userId}`), {
+        meetingId: ex.meetingId, meetingTitle: ex.meetingTitle,
+        userId: ex.userId, date: dayFromDateTime(ex.meetingDate),
+        deptId: ex.deptId || null, status: "izinli", excuse: ex.reason,
+        source: "meeting-report", updatedBy: currentUser?.uid || null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (e) { alert("Hata: " + e.message); }
+  };
+
+  const rejectExcuse = async (ex) => {
+    const meeting = (meetings || []).find(m => m.id === ex.meetingId);
+    if (!meeting) return;
+    try {
+      const excuseStatuses = { ...(meeting.excuseStatuses || {}), [ex.userId]: "reddedildi" };
+      await updateDoc(doc(db, "meetings", ex.meetingId), { excuseStatuses });
+    } catch (e) { alert("Hata: " + e.message); }
+  };
 
   const generateMonthlyTaskReport = () => {
     const ml = monthLabel(taskReportMonth);
@@ -2156,10 +2235,11 @@ function AuditPage({ attendance, tasks, users, depts }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
         {[
           ["Devamsızlık Uyarısı", absentWarnings.length, ROMA_RED],
-          ["Gecikmeli Görev", delayedTasks.length, GOLD],
+          ["Bekleyen Mazaret", bekleyenExcuses.length, GOLD],
+          ["Gecikmeli Görev", delayedTasks.length, "#8A6A16"],
           ["Onay Bekleyen Görev", pendingApproval.length, STOIC_NAVY],
         ].map(([label, num, color]) => (
           <div key={label} style={S.stat(color)}>
@@ -2168,6 +2248,73 @@ function AuditPage({ attendance, tasks, users, depts }) {
           </div>
         ))}
       </div>
+
+      {/* Bekleyen Mazaretler */}
+      <div style={S.card}>
+        <div style={{ ...S.cardTitle, marginBottom: 12, color: GOLD }}>📋 Bekleyen Mazaret Talepleri</div>
+        {bekleyenExcuses.length === 0 ? (
+          <div style={S.empty}>Onay bekleyen mazaret talebi yok</div>
+        ) : (
+          <table style={S.table}>
+            <thead>
+              <tr>{["Kişi", "Toplantı", "Tarih", "Mazeret", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {bekleyenExcuses.map((ex, i) => {
+                const u = users.find(x => x.id === ex.userId);
+                return (
+                  <tr key={i}>
+                    <td style={S.td}>
+                      <div style={S.flex(7)}>
+                        <div style={{ ...S.avatar(avatarColor(ex.userId)), width: 28, height: 28, fontSize: 10 }}>{u?.avatar || u?.name?.[0] || "?"}</div>
+                        <strong>{getName(ex.userId)}</strong>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#8A8A8E", marginTop: 2, marginLeft: 35 }}>{getDept(ex.deptId)}</div>
+                    </td>
+                    <td style={S.td}><strong>{ex.meetingTitle}</strong></td>
+                    <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDateTime(ex.meetingDate)}</td>
+                    <td style={{ ...S.td, maxWidth: 280, wordBreak: "break-word", whiteSpace: "normal", color: "#444", lineHeight: 1.5 }}>{ex.reason}</td>
+                    <td style={S.td}>
+                      <div style={S.flex(6)}>
+                        <button style={{ ...S.btn("green"), padding: "4px 10px", fontSize: 12 }} onClick={() => approveExcuse(ex)}>
+                          <Icon name="check" size={12} /> Onayla
+                        </button>
+                        <button style={{ ...S.btn("danger"), padding: "4px 10px", fontSize: 12 }} onClick={() => rejectExcuse(ex)}>
+                          Reddet
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Onaylı / Reddedilen mazaretler özeti */}
+      {pendingExcuses.filter(e => e.status !== "bekliyor").length > 0 && (
+        <div style={{ ...S.card }}>
+          <div style={{ ...S.cardTitle, marginBottom: 12 }}>Mazaret Geçmişi</div>
+          <table style={S.table}>
+            <thead><tr>{["Kişi", "Toplantı", "Mazeret", "Durum"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {pendingExcuses.filter(e => e.status !== "bekliyor").map((ex, i) => (
+                <tr key={i}>
+                  <td style={S.td}><strong>{getName(ex.userId)}</strong><div style={{ fontSize: 11, color: "#8A8A8E" }}>{getDept(ex.deptId)}</div></td>
+                  <td style={S.td}>{ex.meetingTitle}</td>
+                  <td style={{ ...S.td, wordBreak: "break-word", whiteSpace: "normal", maxWidth: 260 }}>{ex.reason}</td>
+                  <td style={S.td}>
+                    <span style={S.badge(ex.status === "onaylı" ? "#30D158" : ROMA_RED)}>
+                      {ex.status === "onaylı" ? "Onaylı" : "Reddedildi"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div style={S.card}>
         <div style={{ ...S.cardTitle, marginBottom: 12, color: ROMA_RED }}>⚠ Devamsızlık Uyarıları (3+ Gelmedi)</div>
