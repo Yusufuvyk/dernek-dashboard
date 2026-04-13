@@ -313,8 +313,13 @@ function LoginPage({ onLogin }) {
     if (reg.pass.length < 6) { setErr("Şifre en az 6 karakter olmalıdır."); return; }
     setLoading(true); setErr("");
     try {
-      const existing = await getDocs(query(collection(db, "registrations"), where("email", "==", reg.email.trim().toLowerCase()), limit(1)));
+      const emailLower = reg.email.trim().toLowerCase();
+      const existing = await getDocs(query(collection(db, "registrations"), where("email", "==", emailLower), limit(1)));
       if (!existing.empty) { setErr("Bu e-posta ile zaten bir kayıt talebi mevcut."); setLoading(false); return; }
+      const blacklisted = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", emailLower), limit(1)));
+      if (!blacklisted.empty) { setErr("Bu e-posta adresiyle hesap oluşturulamaz."); setLoading(false); return; }
+      const existingUser = await getDocs(query(collection(db, "users"), where("email", "==", emailLower), limit(1)));
+      if (!existingUser.empty) { setErr("Bu e-posta adresiyle zaten bir hesap mevcut."); setLoading(false); return; }
       await addDoc(collection(db, "registrations"), {
         name: reg.name.trim(), email: reg.email.trim().toLowerCase(),
         password: reg.pass, title: reg.title.trim(), desiredDept: reg.dept.trim(),
@@ -892,6 +897,22 @@ function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClos
     ? users.filter(u => u.name?.toLowerCase().includes(userSearch.toLowerCase()))
     : users;
 
+  // Departman bazlı gruplama
+  const usersByDept = filteredUsers.reduce((acc, u) => {
+    const deptName = depts.find(d => d.id === u.deptId)?.name || "Departmansız";
+    if (!acc[deptName]) acc[deptName] = [];
+    acc[deptName].push(u);
+    return acc;
+  }, {});
+
+  const addDeptUsers = (deptUsers) => {
+    const ids = deptUsers.map(u => u.id);
+    set("participants", [...new Set([...(f.participants || []), ...ids])]);
+  };
+
+  const addAllUsers = () => set("participants", users.map(u => u.id));
+  const clearAll = () => set("participants", []);
+
   const handleSave = () => {
     if (mode === "add" && f.datetime && new Date(f.datetime) <= new Date()) {
       setDtError("Geçmiş bir tarih/saat seçemezsiniz. Lütfen gelecekteki bir zaman seçin.");
@@ -926,22 +947,40 @@ function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClos
               Katılımcılar
               {(f.participants || []).length > 0 && <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{f.participants.length} seçili</span>}
             </label>
-            <input
-              style={{ ...S.input, width: 160, padding: "5px 10px", fontSize: 12 }}
-              placeholder="Kişi ara…"
-              value={userSearch}
-              onChange={e => setUserSearch(e.target.value)}
-            />
+            <div style={S.flex(6)}>
+              {hasSuperRole(userProfile?.role) && (
+                <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11 }} onClick={addAllUsers}>Tümünü Seç</button>
+              )}
+              {(f.participants || []).length > 0 && (
+                <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11, color: ROMA_RED }} onClick={clearAll}>Temizle</button>
+              )}
+              <input
+                style={{ ...S.input, width: 140, padding: "5px 10px", fontSize: 12 }}
+                placeholder="Kişi ara…"
+                value={userSearch}
+                onChange={e => setUserSearch(e.target.value)}
+              />
+            </div>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, maxHeight: 140, overflowY: "auto", padding: "2px 0" }}>
-            {filteredUsers.map(u => {
-              const isSelected = (f.participants || []).includes(u.id);
-              return (
-                <div key={u.id} onClick={() => toggleP(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
-                  {u.name}
+          <div style={{ maxHeight: 200, overflowY: "auto", padding: "2px 0", display: "flex", flexDirection: "column", gap: 8 }}>
+            {Object.entries(usersByDept).map(([deptName, deptUsers]) => (
+              <div key={deptName}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#8A8A8E", textTransform: "uppercase", letterSpacing: 0.5 }}>{deptName}</span>
+                  <button type="button" style={{ ...S.btn("ghost"), padding: "2px 7px", fontSize: 10 }} onClick={() => addDeptUsers(deptUsers)}>+ Hepsini Ekle</button>
                 </div>
-              );
-            })}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {deptUsers.map(u => {
+                    const isSelected = (f.participants || []).includes(u.id);
+                    return (
+                      <div key={u.id} onClick={() => toggleP(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
+                        {u.name}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
             {filteredUsers.length === 0 && <div style={{ fontSize: 12, color: "#8A8A8E" }}>Sonuç bulunamadı</div>}
           </div>
         </div>
@@ -1152,10 +1191,17 @@ function UsersPage({ users, depts, userProfile, currentUser, registrations }) {
       `• Profil silinir\n• Tüm devamsızlık kayıtları silinir\n• Tekrar giriş yapamaz`
     )) return;
     try {
-      // 1. Firestore profilini sil (bu yeterli: profil yoksa app anında signOut yapar)
+      // 1. Kara listeye ekle (tekrar kayıt yapmasını engelle)
+      if (u.email) {
+        await setDoc(doc(db, "deletedUsers", u.email.toLowerCase()), {
+          email: u.email.toLowerCase(), name: u.name, deletedAt: new Date().toISOString(),
+        });
+      }
+
+      // 2. Firestore profilini sil (bu yeterli: profil yoksa app anında signOut yapar)
       await deleteDoc(doc(db, "users", u.id));
 
-      // 2. Devamsızlık kayıtlarını sil
+      // 3. Devamsızlık kayıtlarını sil
       const attSnap = await getDocs(query(collection(db, "attendance"), where("userId", "==", u.id)));
       await Promise.all(attSnap.docs.map(d => deleteDoc(d.ref)));
 
@@ -1602,10 +1648,11 @@ function AttendancePage({ attendance, users, depts, currentUser, userProfile }) 
   };
   const scopedRecords = useMemo(() => {
     return attendance
+      .filter(r => users.some(u => u.id === r.userId))
       .filter(r => !roleRestrictedDept || r.deptId === roleRestrictedDept)
       .filter(r => selectedDept === "all" || r.deptId === selectedDept)
       .sort((a, b) => (a.meetingTitle || "").localeCompare(b.meetingTitle || "", "tr"));
-  }, [attendance, selectedDept, roleRestrictedDept]);
+  }, [attendance, users, selectedDept, roleRestrictedDept]);
 
   const records = useMemo(() => {
     return scopedRecords.filter(r => r.date === selectedDate);
@@ -2621,6 +2668,18 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
       bodyHtml: `<h1>Toplantı Raporu</h1><table><tr><td>Toplantı</td><td>${m.title}</td></tr><tr><td>Departman</td><td>${getDept(m.deptId)}</td></tr><tr><td>Tarih</td><td>${fmtDateTime(m.datetime)}</td></tr><tr><td>Katılımcılar</td><td>${(m.participants || []).map(getName).join(", ")}</td></tr></table><h2>Alınan Kararlar</h2><div class="box">${m.report?.kararlar || "-"}</div><h2>Aksiyon Maddeleri</h2><div class="box">${m.report?.aksiyonlar || "-"}</div>`,
     });
   };
+
+  const deleteReport = async (m) => {
+    if (!window.confirm(`"${m.title}" raporunu silmek istiyor musunuz?\n\nBu işlem toplantıyı "Planlandı" durumuna geri alır ve devamsızlık kayıtlarını siler.`)) return;
+    try {
+      await updateDoc(doc(db, "meetings", m.id), { report: null, status: "planlandı" });
+      const attSnap = await getDocs(query(collection(db, "attendance"), where("meetingId", "==", m.id)));
+      await Promise.all(attSnap.docs.map(d => deleteDoc(d.ref)));
+    } catch (e) {
+      alert("Rapor silinemedi: " + e.message);
+    }
+  };
+
   return (
     <div>
       <div style={{ ...S.flexBetween, marginBottom: 12 }}>
@@ -2643,7 +2702,12 @@ function ReportsPage({ meetings, depts, users, currentUser, userProfile }) {
                 <td style={S.td}><strong>{m.title}</strong></td>
                 <td style={S.td}><span style={S.tag}>{getDept(m.deptId)}</span></td>
                 <td style={S.td}>{fmtDateTime(m.datetime)}</td>
-                <td style={S.td}><button style={S.btn("ghost")} onClick={() => printReport(m)}><Icon name="download" size={13} /> PDF</button></td>
+                <td style={S.td}>
+                  <div style={S.flex(6)}>
+                    <button style={S.btn("ghost")} onClick={() => printReport(m)}><Icon name="download" size={13} /> PDF</button>
+                    {hasAdminRole(userProfile?.role) && <button style={{ ...S.btn("ghost"), color: ROMA_RED }} onClick={() => deleteReport(m)}><Icon name="trash" size={13} /></button>}
+                  </div>
+                </td>
               </tr>
             ))}</tbody>
           </table>
