@@ -638,7 +638,6 @@ function TasksPage({ tasks, depts, users, currentUser, userProfile }) {
 
 function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
   const [f, setF] = useState(task);
-  const [userSearch, setUserSearch] = useState("");
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const isEdit = mode === "edit";
   // Dept Yöneticisi sadece kendi departmanını görebilir
@@ -646,15 +645,7 @@ function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
     ? depts
     : depts.filter(d => d.id === userProfile?.deptId);
 
-  const toggleUser = (id) => {
-    const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
-    const updated = arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id];
-    set("assignedTo", updated);
-  };
-
-  const filteredUsers = userSearch.trim()
-    ? users.filter(u => u.name?.toLowerCase().includes(userSearch.toLowerCase()))
-    : users;
+  const assignedArr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
 
   return (
     <Modal title={isEdit ? "Görevi Düzenle" : "Yeni Görev"} onClose={onClose}>
@@ -664,32 +655,14 @@ function TaskModal({ mode, task, depts, users, userProfile, onSave, onClose }) {
 
         <div><label style={S.label}>Departman</label><select style={S.select} value={f.deptId} onChange={e => set("deptId", e.target.value)} disabled={visibleDepts.length === 1}>{visibleDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
 
-        <div>
-          <div style={{ ...S.flexBetween, marginBottom: 6 }}>
-            <label style={{ ...S.label, marginBottom: 0 }}>
-              Atananlar
-              {(() => { const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean); return arr.length > 0 ? <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{arr.length} seçili</span> : null; })()}
-            </label>
-            <input
-              style={{ ...S.input, width: 160, padding: "5px 10px", fontSize: 12 }}
-              placeholder="Kişi ara…"
-              value={userSearch}
-              onChange={e => setUserSearch(e.target.value)}
-            />
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, maxHeight: 140, overflowY: "auto", padding: "2px 0" }}>
-            {filteredUsers.map(u => {
-              const arr = Array.isArray(f.assignedTo) ? f.assignedTo : [f.assignedTo].filter(Boolean);
-              const isSelected = arr.includes(u.id);
-              return (
-                <div key={u.id} onClick={() => toggleUser(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
-                  {u.name}
-                </div>
-              );
-            })}
-            {filteredUsers.length === 0 && <div style={{ fontSize: 12, color: "#8A8A8E" }}>Sonuç bulunamadı</div>}
-          </div>
-        </div>
+        <DeptAccordionPicker
+          label="Atananlar"
+          users={users}
+          depts={depts}
+          selected={assignedArr}
+          onChange={v => set("assignedTo", v)}
+          userProfile={userProfile}
+        />
 
         <div style={S.formRow}>
           <div>
@@ -880,38 +853,99 @@ function ExcuseModal({ meeting, onSave, onClose }) {
   );
 }
 
-function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClose }) {
-  const [f, setF] = useState(meeting);
-  const [userSearch, setUserSearch] = useState("");
-  const [dtError, setDtError] = useState("");
-  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const toggleP = id => set("participants", (f.participants || []).includes(id) ? f.participants.filter(x => x !== id) : [...(f.participants || []), id]);
-  const visibleDepts = hasSuperRole(userProfile?.role)
-    ? depts
-    : depts.filter(d => d.id === userProfile?.deptId);
+function DeptAccordionPicker({ label, users, depts, selected, onChange, userProfile }) {
+  const [openDepts, setOpenDepts] = useState({});
+  const [search, setSearch] = useState("");
+  const toggleDept = name => setOpenDepts(p => ({ ...p, [name]: !p[name] }));
+  const isSearching = search.trim().length > 0;
 
-  // Minimum seçilebilir tarih/saat = şu an (sadece yeni toplantılarda)
-  const nowLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-
-  const filteredUsers = userSearch.trim()
-    ? users.filter(u => u.name?.toLowerCase().includes(userSearch.toLowerCase()))
+  const filteredUsers = isSearching
+    ? users.filter(u => u.name?.toLowerCase().includes(search.toLowerCase()))
     : users;
 
-  // Departman bazlı gruplama
-  const usersByDept = filteredUsers.reduce((acc, u) => {
+  const groups = filteredUsers.reduce((acc, u) => {
     const deptName = depts.find(d => d.id === u.deptId)?.name || "Departmansız";
     if (!acc[deptName]) acc[deptName] = [];
     acc[deptName].push(u);
     return acc;
   }, {});
 
-  const addDeptUsers = (deptUsers) => {
-    const ids = deptUsers.map(u => u.id);
-    set("participants", [...new Set([...(f.participants || []), ...ids])]);
+  const toggleUser = id => {
+    onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
   };
+  const addDept = deptUsers => onChange([...new Set([...selected, ...deptUsers.map(u => u.id)])]);
+  const addAll = () => onChange(users.map(u => u.id));
+  const clearAll = () => onChange([]);
 
-  const addAllUsers = () => set("participants", users.map(u => u.id));
-  const clearAll = () => set("participants", []);
+  const deptEntries = Object.entries(groups);
+
+  return (
+    <div>
+      <div style={{ ...S.flexBetween, marginBottom: 8 }}>
+        <label style={{ ...S.label, marginBottom: 0 }}>
+          {label}
+          {selected.length > 0 && <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{selected.length} seçili</span>}
+        </label>
+        <div style={S.flex(6)}>
+          {hasSuperRole(userProfile?.role) && (
+            <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11 }} onClick={addAll}>Herkesi Çağır</button>
+          )}
+          {selected.length > 0 && (
+            <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11, color: ROMA_RED }} onClick={clearAll}>Temizle</button>
+          )}
+          <input style={{ ...S.input, width: 130, padding: "5px 10px", fontSize: 12 }} placeholder="Kişi ara…" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+      </div>
+      <div style={{ border: "1px solid #E6E6E8", borderRadius: 10, overflow: "hidden", maxHeight: 260, overflowY: "auto" }}>
+        {deptEntries.length === 0 && (
+          <div style={{ padding: "12px", fontSize: 12, color: "#8A8A8E", textAlign: "center" }}>Sonuç bulunamadı</div>
+        )}
+        {deptEntries.map(([deptName, deptUsers], idx) => {
+          const isOpen = isSearching || !!openDepts[deptName];
+          const selectedCount = deptUsers.filter(u => selected.includes(u.id)).length;
+          return (
+            <div key={deptName} style={{ borderBottom: idx < deptEntries.length - 1 ? "1px solid #E6E6E8" : "none" }}>
+              <div onClick={() => toggleDept(deptName)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", cursor: "pointer", background: isOpen ? "#F5F5F7" : "#fff", userSelect: "none" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{deptName}</span>
+                  <span style={{ fontSize: 11, color: "#8A8A8E" }}>{deptUsers.length} kişi</span>
+                  {selectedCount > 0 && <span style={{ ...S.badge(STOIC_NAVY), fontSize: 10 }}>{selectedCount} seçili</span>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button type="button" style={{ ...S.btn("ghost"), padding: "2px 8px", fontSize: 11 }} onClick={e => { e.stopPropagation(); addDept(deptUsers); }}>+ Hepsini Ekle</button>
+                  <span style={{ fontSize: 11, color: "#8A8A8E" }}>{isOpen ? "▲" : "▼"}</span>
+                </div>
+              </div>
+              {isOpen && (
+                <div style={{ padding: "8px 12px 10px", display: "flex", flexWrap: "wrap", gap: 6, background: "#FAFAFA" }}>
+                  {deptUsers.map(u => {
+                    const isSel = selected.includes(u.id);
+                    return (
+                      <div key={u.id} onClick={() => toggleUser(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSel ? "#1C1C1E" : "#F2F2F7", color: isSel ? "#fff" : "#1C1C1E", border: isSel ? "1px solid #444" : "1px solid transparent" }}>
+                        {u.name}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClose }) {
+  const [f, setF] = useState(meeting);
+  const [dtError, setDtError] = useState("");
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const visibleDepts = hasSuperRole(userProfile?.role)
+    ? depts
+    : depts.filter(d => d.id === userProfile?.deptId);
+
+  // Minimum seçilebilir tarih/saat = şu an (sadece yeni toplantılarda)
+  const nowLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 
   const handleSave = () => {
     if (mode === "add" && f.datetime && new Date(f.datetime) <= new Date()) {
@@ -941,49 +975,14 @@ function MeetingModal({ mode, meeting, depts, users, userProfile, onSave, onClos
         </div>
         {dtError && <div style={{ fontSize: 12, color: ROMA_RED, background: "#FFF0F0", borderRadius: 7, padding: "7px 10px", marginTop: -6 }}>{dtError}</div>}
 
-        <div>
-          <div style={{ ...S.flexBetween, marginBottom: 6 }}>
-            <label style={{ ...S.label, marginBottom: 0 }}>
-              Katılımcılar
-              {(f.participants || []).length > 0 && <span style={{ ...S.badge(STOIC_NAVY), marginLeft: 7, fontSize: 10 }}>{f.participants.length} seçili</span>}
-            </label>
-            <div style={S.flex(6)}>
-              {hasSuperRole(userProfile?.role) && (
-                <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11 }} onClick={addAllUsers}>Tümünü Seç</button>
-              )}
-              {(f.participants || []).length > 0 && (
-                <button type="button" style={{ ...S.btn("ghost"), padding: "4px 9px", fontSize: 11, color: ROMA_RED }} onClick={clearAll}>Temizle</button>
-              )}
-              <input
-                style={{ ...S.input, width: 140, padding: "5px 10px", fontSize: 12 }}
-                placeholder="Kişi ara…"
-                value={userSearch}
-                onChange={e => setUserSearch(e.target.value)}
-              />
-            </div>
-          </div>
-          <div style={{ maxHeight: 200, overflowY: "auto", padding: "2px 0", display: "flex", flexDirection: "column", gap: 8 }}>
-            {Object.entries(usersByDept).map(([deptName, deptUsers]) => (
-              <div key={deptName}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#8A8A8E", textTransform: "uppercase", letterSpacing: 0.5 }}>{deptName}</span>
-                  <button type="button" style={{ ...S.btn("ghost"), padding: "2px 7px", fontSize: 10 }} onClick={() => addDeptUsers(deptUsers)}>+ Hepsini Ekle</button>
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {deptUsers.map(u => {
-                    const isSelected = (f.participants || []).includes(u.id);
-                    return (
-                      <div key={u.id} onClick={() => toggleP(u.id)} style={{ padding: "4px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontWeight: 500, background: isSelected ? "#1C1C1E" : "#F2F2F7", color: isSelected ? "#fff" : "#1C1C1E", border: isSelected ? "1px solid #444" : "1px solid transparent" }}>
-                        {u.name}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            {filteredUsers.length === 0 && <div style={{ fontSize: 12, color: "#8A8A8E" }}>Sonuç bulunamadı</div>}
-          </div>
-        </div>
+        <DeptAccordionPicker
+          label="Katılımcılar"
+          users={users}
+          depts={depts}
+          selected={f.participants || []}
+          onChange={v => set("participants", v)}
+          userProfile={userProfile}
+        />
 
         <div style={{ ...S.flex(10), justifyContent: "flex-end" }}>
           <button style={S.btn("ghost")} onClick={onClose}>İptal</button>
