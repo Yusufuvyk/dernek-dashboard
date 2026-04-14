@@ -20,12 +20,12 @@ export const normalizeRole = (role) => {
 // Level 1: Departman Yöneticisi (sadece kendi departmanı)
 // Level 2: Departman Üyesi / Üye (okuma)
 // Level 3: Denetmen (sadece denetim paneli)
-export const hasSuperRole = r => ["admin", "baskan", "teknik yoneticisi", "yardimci"].includes(roleKey(r));
+export const hasSuperRole = r => ["admin", "baskan", "teknik yonetici", "yardimci"].includes(roleKey(r));
 export const hasAdminRole = hasSuperRole; // backward-compat alias
 
 export const roleLevel = r => {
   const key = roleKey(r);
-  if (["admin", "baskan", "teknik yoneticisi", "yardimci", "denetmen"].includes(key)) return 0;
+  if (["admin", "baskan", "teknik yonetici", "yardimci", "denetmen"].includes(key)) return 0;
   if (key === "departman yoneticisi") return 1;
   return 2; // Üye, Departman Üyesi
 };
