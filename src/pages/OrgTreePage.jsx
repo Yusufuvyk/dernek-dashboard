@@ -2,7 +2,7 @@ import { useState } from "react";
 import { S } from "../utils/styles";
 import { ROMA_RED, STOIC_NAVY, GOLD } from "../utils/constants";
 import { avatarColor } from "../utils/constants";
-import { hasAdminRole, roleKey, displayRole } from "../utils/roles";
+import { hasAdminRole, roleKey, displayRole, isDenetmenRole } from "../utils/roles";
 
 export default function OrgTreePage({ users, depts, userProfile }) {
   const [selected, setSelected] = useState(null);
@@ -10,16 +10,19 @@ export default function OrgTreePage({ users, depts, userProfile }) {
 
   const nodeColor = r => {
     const k = roleKey(r);
-    if (k === "yardimci") return "#A855F7";
-    if (k === "denetmen") return GOLD;
+    if (k === "yardimci" || k === "baskan yardimcisi") return "#A855F7";
+    if (k === "departman yardimcisi") return "#7C3AED";
+    if (k === "denetmen yardimcisi") return "#C084FC";
+    if (isDenetmenRole(r)) return GOLD;
     if (hasAdminRole(r)) return ROMA_RED;
     if (["Departman Yöneticisi", "Departman Üyesi"].includes(r)) return STOIC_NAVY;
     return "#30D158";
   };
 
-  // Roots: Başkan/Admin — Yardımcı ve Denetmen hariç
+  // Roots: Başkan/TeknikYönetici — Yardımcı türleri ve Denetmen hariç
   const roots = users.filter(u =>
-    hasAdminRole(u.role) && roleKey(u.role) !== "yardimci"
+    hasAdminRole(u.role) &&
+    !["yardimci", "baskan yardimcisi"].includes(roleKey(u.role))
   );
 
   function getChildren(user) {
@@ -27,8 +30,9 @@ export default function OrgTreePage({ users, depts, userProfile }) {
     const explicitIds = new Set(explicit.map(c => c.id));
     let implicit = [];
 
-    // Root düğüm: Başkan/TeknikYönetici (Yardımcı hariç)
-    const isRootNode = hasAdminRole(user.role) && roleKey(user.role) !== "yardimci";
+    // Root düğüm: Başkan/TeknikYönetici (Yardımcı türleri hariç)
+    const isRootNode = hasAdminRole(user.role) &&
+      !["yardimci", "baskan yardimcisi"].includes(roleKey(user.role));
 
     if (isRootNode) {
       const deptManagers = users.filter(u =>
@@ -44,19 +48,26 @@ export default function OrgTreePage({ users, depts, userProfile }) {
         return !hasManagerInDept;
       });
 
-      // Denetmenler: managerId yoksa root altında göster
+      // Denetmen ve Denetmen Yardımcısı: managerId yoksa root altında göster
       const implicitDenetmen = users.filter(u =>
-        roleKey(u.role) === "denetmen" &&
+        isDenetmenRole(u.role) &&
         !u.managerId &&
         !explicitIds.has(u.id)
       );
 
-      implicit = [...deptManagers, ...orphanedMembers, ...implicitDenetmen];
-    } else if (user.role === "Departman Yöneticisi") {
+      // Başkan Yardımcısı: managerId yoksa root altında göster
+      const implicitBYardimci = users.filter(u =>
+        ["yardimci", "baskan yardimcisi"].includes(roleKey(u.role)) &&
+        !u.managerId &&
+        !explicitIds.has(u.id)
+      );
+
+      implicit = [...deptManagers, ...orphanedMembers, ...implicitDenetmen, ...implicitBYardimci];
+    } else if (["departman yoneticisi", "departman yardimcisi"].includes(roleKey(user.role))) {
       implicit = users.filter(u =>
         !hasAdminRole(u.role) &&
-        u.role !== "Departman Yöneticisi" &&
-        roleKey(u.role) !== "denetmen" &&
+        !["departman yoneticisi", "departman yardimcisi"].includes(roleKey(u.role)) &&
+        !isDenetmenRole(u.role) &&
         u.deptId === user.deptId &&
         !u.managerId &&
         !explicitIds.has(u.id)

@@ -35,4 +35,7 @@ export const ROLE_COLOR = {
   "Genel Üye": "#30D158",
   "Denetmen": GOLD,
   "Yardımcı": "#A855F7",
+  "Başkan Yardımcısı": "#A855F7",
+  "Departman Yardımcısı": "#7C3AED",
+  "Denetmen Yardımcısı": "#C084FC",
 };

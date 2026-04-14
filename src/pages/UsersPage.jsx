@@ -207,10 +207,12 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
                 <select style={S.select} value={approveModal.role} onChange={e => setApproveModal(p => ({ ...p, role: e.target.value }))}>
                   <option value="Başkan">Başkan</option>
                   <option value="Teknik Yönetici">Teknik Yönetici</option>
-                  <option value="Yardımcı">Yardımcı</option>
+                  <option value="Başkan Yardımcısı">Başkan Yardımcısı</option>
                   <option value="Departman Yöneticisi">Departman Yöneticisi</option>
+                  <option value="Departman Yardımcısı">Departman Yardımcısı</option>
                   <option value="Üye">Departman Üyesi</option>
                   <option value="Denetmen">Denetmen</option>
+                  <option value="Denetmen Yardımcısı">Denetmen Yardımcısı</option>
                 </select>
               </div>
               <div><label style={S.label}>Departman</label>
@@ -242,7 +244,7 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
             <div><label style={S.label}>Şifre</label><input type="password" style={S.input} value={modal.user.password} onChange={e => setModal(p => ({ ...p, user: { ...p.user, password: e.target.value } }))} /></div>
           </>}
           <div style={S.formRow}>
-            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Teknik Yönetici">Teknik Yönetici</option><option value="Yardımcı">Yardımcı</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Üye">Departman Üyesi</option><option value="Denetmen">Denetmen</option></select></div>
+            <div><label style={S.label}>Rol</label><select style={S.select} value={modal.user.role} onChange={e => setModal(p => ({ ...p, user: { ...p.user, role: e.target.value } }))}><option value="Başkan">Başkan</option><option value="Teknik Yönetici">Teknik Yönetici</option><option value="Başkan Yardımcısı">Başkan Yardımcısı</option><option value="Departman Yöneticisi">Departman Yöneticisi</option><option value="Departman Yardımcısı">Departman Yardımcısı</option><option value="Üye">Departman Üyesi</option><option value="Denetmen">Denetmen</option><option value="Denetmen Yardımcısı">Denetmen Yardımcısı</option></select></div>
             <div><label style={S.label}>Departman</label><select style={S.select} value={modal.user.deptId || ""} onChange={e => setModal(p => ({ ...p, user: { ...p.user, deptId: e.target.value || null } }))}><option value="">—</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
           </div>
           {err && <div style={{ color: "#6A5610", fontSize: 12 }}>{err}</div>}
