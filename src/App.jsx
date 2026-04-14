@@ -171,7 +171,7 @@ export default function App() {
       <div style={S.sidebar}>
         <div style={{ padding: "16px 14px 14px", borderBottom: "1px solid #E4E7EC" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 17, fontWeight: 800, color: "#101828", letterSpacing: 1.2 }}>
-            <img src={marcusLogo} alt="Marcus logo" style={{ width: 48, height: 48, objectFit: "contain" }} />
+            <img src={marcusLogo} alt="Marcus logo" style={{ width: 48, height: 48, objectFit: "contain", mixBlendMode: "multiply" }} />
             <span>MARCUS</span>
           </div>
         </div>
