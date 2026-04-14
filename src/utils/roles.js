@@ -16,25 +16,35 @@ export const normalizeRole = (role) => {
   return role;
 };
 
-// Level 0: Başkan + Teknik Yönetici + Başkan Yardımcısı (tam yetki)
+// Level 0: Başkan + Teknik Yönetici + TY Yardımcısı + Başkan Yardımcısı (tam yetki)
 //          Denetmen + Denetmen Yardımcısı (sadece denetim)
 // Level 1: Departman Yöneticisi + Departman Yardımcısı (kendi departmanı)
 // Level 2: Departman Üyesi / Üye (okuma)
-export const hasSuperRole = r => ["admin", "baskan", "teknik yonetici", "yardimci", "baskan yardimcisi"].includes(roleKey(r));
+export const hasSuperRole = r => ["admin", "baskan", "teknik yonetici", "teknik yonetici yardimcisi", "yardimci", "baskan yardimcisi"].includes(roleKey(r));
 export const hasAdminRole = hasSuperRole; // backward-compat alias
 
 export const roleLevel = r => {
   const key = roleKey(r);
-  if (["admin", "baskan", "teknik yonetici", "yardimci", "baskan yardimcisi", "denetmen", "denetmen yardimcisi"].includes(key)) return 0;
+  if (["admin", "baskan", "teknik yonetici", "teknik yonetici yardimcisi", "yardimci", "baskan yardimcisi", "denetmen", "denetmen yardimcisi"].includes(key)) return 0;
   if (["departman yoneticisi", "departman yardimcisi"].includes(key)) return 1;
   return 2; // Üye, Departman Üyesi
 };
 
 export const isDenetmenRole = r => ["denetmen", "denetmen yardimcisi"].includes(roleKey(r));
 
+// Sadece Teknik Yönetici (email hardcoded) veya role kontrolü
+export const isTeknikYonetici = (userProfile) =>
+  userProfile?.email === "yusufuveyik@gmail.com" ||
+  roleKey(userProfile?.role) === "teknik yonetici";
+
+// Kullanıcı silme yetkisi: sadece Teknik Yönetici ve Başkan
+export const canDeleteUsers = (userProfile) =>
+  isTeknikYonetici(userProfile) || roleKey(userProfile?.role) === "baskan";
+
 export const displayRole = r => {
   const key = roleKey(r);
   if (key === "teknik yonetici") return "Teknik Yönetici";
+  if (key === "teknik yonetici yardimcisi") return "Teknik Yönetici Yardımcısı";
   if (key === "baskan yardimcisi" || key === "yardimci") return "Başkan Yardımcısı";
   if (key === "departman yardimcisi") return "Departman Yardımcısı";
   if (key === "denetmen yardimcisi") return "Denetmen Yardımcısı";

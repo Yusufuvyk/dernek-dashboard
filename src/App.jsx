@@ -8,7 +8,7 @@ import {
 import { signOut, onAuthStateChanged } from "firebase/auth";
 
 import { S } from "./utils/styles";
-import { normalizeRole, hasSuperRole, isDenetmenRole, roleLevel } from "./utils/roles";
+import { normalizeRole, hasSuperRole, isDenetmenRole, roleLevel, isTeknikYonetici } from "./utils/roles";
 import Icon from "./components/Icon";
 import { avatarColor } from "./utils/constants";
 
@@ -24,6 +24,7 @@ import MessagesPage from "./pages/MessagesPage";
 import FileRequestsPage from "./pages/FileRequestsPage";
 import ReportsPage from "./pages/ReportsPage";
 import AuditPage from "./pages/AuditPage";
+import SystemPage from "./pages/SystemPage";
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -115,6 +116,7 @@ export default function App() {
 
   const rLevel = roleLevel(userProfile?.role);
   const canAudit = hasSuperRole(userProfile?.role) || isDenetmenRole(userProfile?.role);
+  const isOwner = isTeknikYonetici(userProfile);
 
   // NAV — Denetmen dahil tüm Level 0 tam menü alır
   const NAV_GROUPS = (() => {
@@ -125,7 +127,7 @@ export default function App() {
         genel,
         { label: "Organizasyon", items: [{ id: "orgtree", label: "Yönetim Ağacı", icon: "tree" }, { id: "departments", label: "Departmanlar", icon: "users" }, { id: "userlist", label: "Kullanıcılar", icon: "users", badge: pendingRegs }] },
         iletisim,
-        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, { id: "audit", label: "Denetim", icon: "reports" }] },
+        { label: "Raporlar", items: [{ id: "reports", label: "Raporlar", icon: "reports" }, { id: "audit", label: "Denetim", icon: "reports" }, ...(isOwner ? [{ id: "system", label: "Sistem Paneli", icon: "reports" }] : [])] },
       ];
     }
     if (rLevel === 1) {
@@ -143,7 +145,7 @@ export default function App() {
     ];
   })();
 
-  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli" };
+  const TITLES = { dashboard: "Dashboard", tasks: "Görev Yönetimi", meetings: "Toplantılar", attendance: "Devamsızlık Takibi", orgtree: "Yönetim Ağacı", departments: "Departmanlar", userlist: "Kullanıcılar", messages: "Mesajlar", reports: "Raporlar", audit: "Denetim Paneli", system: "Sistem Paneli" };
   const props = { tasks, meetings, depts, users, messages, fileRequests, attendance, currentUser, userProfile, registrations };
   const noAccess = <div style={S.card}><div style={S.empty}>Bu sayfaya erişim yetkiniz yok.</div></div>;
 
@@ -159,6 +161,7 @@ export default function App() {
       case "messages": return <MessagesPage {...props} />;
       case "reports": return <ReportsPage {...props} />;
       case "audit": return canAudit ? <AuditPage {...props} /> : noAccess;
+      case "system": return isOwner ? <SystemPage {...props} /> : noAccess;
       default: return null;
     }
   };
