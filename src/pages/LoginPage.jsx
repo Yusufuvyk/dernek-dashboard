@@ -36,8 +36,7 @@ export default function LoginPage({ onLogin }) {
       const emailLower = reg.email.trim().toLowerCase();
       const existing = await getDocs(query(collection(db, "registrations"), where("email", "==", emailLower), limit(1)));
       if (!existing.empty) { setErr("Bu e-posta ile zaten bir kayıt talebi mevcut."); setLoading(false); return; }
-      const blacklisted = await getDocs(query(collection(db, "deletedUsers"), where("email", "==", emailLower), limit(1)));
-      if (!blacklisted.empty) { setErr("Bu e-posta adresiyle hesap oluşturulamaz."); setLoading(false); return; }
+
       const existingUser = await getDocs(query(collection(db, "users"), where("email", "==", emailLower), limit(1)));
       if (!existingUser.empty) { setErr("Bu e-posta adresiyle zaten bir hesap mevcut."); setLoading(false); return; }
       await addDoc(collection(db, "registrations"), {
