@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { db, auth } from "../firebase";
+import { db, auth, firebaseConfig } from "../firebase";
 import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
   getDocs, query, where, serverTimestamp
 } from "firebase/firestore";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, getAuth } from "firebase/auth";
+import { initializeApp, getApps } from "firebase/app";
 
 import { S } from "../utils/styles";
 import { avatarColor, ROMA_RED, STOIC_NAVY, GOLD, ROLE_COLOR } from "../utils/constants";
@@ -87,8 +88,27 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
     setLoading(true); setErr("");
     try {
       const { reg, role, deptId, title } = approveModal;
-      const cred = await createUserWithEmailAndPassword(auth, reg.email, reg.password);
-      await setDoc(doc(db, "users", cred.user.uid), {
+
+      // İkincil Firebase app — admin oturumunu bozmadan UID alır
+      const secondaryApp = getApps().find(a => a.name === "secondary")
+        || initializeApp(firebaseConfig, "secondary");
+      const secondaryAuth = getAuth(secondaryApp);
+
+      let uid;
+      try {
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, reg.email, reg.password);
+        uid = cred.user.uid;
+      } catch (e) {
+        if (e.code === "auth/email-already-in-use") {
+          // Auth hesabı var ama Firestore profili yok — giriş yaparak UID al
+          const cred = await signInWithEmailAndPassword(secondaryAuth, reg.email, reg.password);
+          uid = cred.user.uid;
+        } else {
+          throw e;
+        }
+      }
+
+      await setDoc(doc(db, "users", uid), {
         name: reg.name, email: reg.email, role,
         deptId: deptId || null, title: title || "",
         avatar: reg.name.slice(0, 2).toUpperCase(),
