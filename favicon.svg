@@ -1,5 +1,6 @@
-<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g stroke="#0A0A0A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+<svg width="32" height="32" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="52" fill="#101828"/>
+  <g stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
     <path d="M40 114c0-42 37-74 88-74s88 32 88 74"/>
     <path d="M62 113c-14 18-20 44-13 67 4 15 13 27 25 34"/>
     <path d="M194 113c14 18 20 44 13 67-4 15-13 27-25 34"/>
@@ -17,15 +18,15 @@
     <path d="M207 133c10-11 12-30 5-44-7-14-20-22-33-20"/>
     <path d="M93 54c7-10 19-16 35-16 16 0 28 6 35 16"/>
   </g>
-  <g fill="#0A0A0A">
+  <g fill="#FFFFFF">
     <ellipse cx="173" cy="133" rx="6" ry="10"/>
-    <path d="M114 86c-13 4-22 13-29 24" stroke="#0A0A0A" stroke-width="7" stroke-linecap="round"/>
-    <path d="M98 86c-13 6-22 16-27 29" stroke="#0A0A0A" stroke-width="7" stroke-linecap="round"/>
-    <path d="M84 89c-10 7-17 16-21 28" stroke="#0A0A0A" stroke-width="7" stroke-linecap="round"/>
-    <path d="M162 86c13 4 22 13 29 24" stroke="#0A0A0A" stroke-width="7" stroke-linecap="round"/>
-    <path d="M176 89c10 7 17 16 21 28" stroke="#0A0A0A" stroke-width="7" stroke-linecap="round"/>
+    <path d="M114 86c-13 4-22 13-29 24" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+    <path d="M98 86c-13 6-22 16-27 29" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+    <path d="M84 89c-10 7-17 16-21 28" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+    <path d="M162 86c13 4 22 13 29 24" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+    <path d="M176 89c10 7 17 16 21 28" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
   </g>
-  <path d="M74 75c-13 9-23 22-28 37" stroke="#0A0A0A" stroke-width="9" stroke-linecap="round"/>
-  <path d="M67 96c-12 8-20 18-24 31" stroke="#0A0A0A" stroke-width="9" stroke-linecap="round"/>
-  <path d="M62 118c-10 8-16 17-18 28" stroke="#0A0A0A" stroke-width="9" stroke-linecap="round"/>
+  <path d="M74 75c-13 9-23 22-28 37" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"/>
+  <path d="M67 96c-12 8-20 18-24 31" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"/>
+  <path d="M62 118c-10 8-16 17-18 28" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"/>
 </svg>
