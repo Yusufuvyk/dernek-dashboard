@@ -169,10 +169,11 @@ export default function App() {
   return (
     <div style={S.app}>
       <div style={S.sidebar}>
-        <div style={{ padding: "16px 14px 14px", borderBottom: "1px solid #E4E7EC" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 17, fontWeight: 800, color: "#101828", letterSpacing: 1.2 }}>
-            <img src={marcusLogo} alt="Marcus logo" style={{ width: 48, height: 48, objectFit: "contain", mixBlendMode: "multiply" }} />
-            <span>MARCUS</span>
+        <div style={{ padding: "20px 14px 16px", borderBottom: "1px solid #E4E7EC", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <img src={marcusLogo} alt="Marcus logo" style={{ width: 64, height: 64, objectFit: "contain", mixBlendMode: "multiply" }} />
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 900, color: "#101828", letterSpacing: 3, textTransform: "uppercase" }}>MARCUS</div>
+            <div style={{ fontSize: 9.5, color: "#9CA3AF", letterSpacing: 1.5, textTransform: "uppercase", marginTop: 1 }}>Yönetim Sistemi</div>
           </div>
         </div>
         <nav style={S.nav}>
