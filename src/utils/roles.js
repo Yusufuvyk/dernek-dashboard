@@ -34,7 +34,7 @@ export const isDenetmenRole = r => roleKey(r) === "denetmen";
 
 export const displayRole = r => {
   const key = roleKey(r);
-  if (key === "teknik yoneticisi") return "Teknik Yönetici";
+  if (key === "teknik yonetici") return "Teknik Yönetici";
   if (key === "yardimci") return "Yardımcı";
   if (hasSuperRole(r)) return "Başkan";
   if (key === "departman yoneticisi") return "Departman Yöneticisi";
