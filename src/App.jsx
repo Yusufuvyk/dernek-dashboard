@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db, auth } from "./firebase";
-import marcusLogo from "./assets/marcus-logo.svg";
+import marcusLogo from "./assets/marcus-logo.png";
 import {
   collection, doc, setDoc, getDocs, updateDoc,
   onSnapshot, query, limit, serverTimestamp, where
