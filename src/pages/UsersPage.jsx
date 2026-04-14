@@ -4,7 +4,7 @@ import {
   collection, doc, setDoc, addDoc, deleteDoc, updateDoc,
   getDocs, query, where, serverTimestamp
 } from "firebase/firestore";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, getAuth } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, getAuth } from "firebase/auth";
 import { initializeApp, getApps } from "firebase/app";
 
 import { S } from "../utils/styles";
@@ -55,10 +55,10 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
       `• Profil silinir\n• Tüm devamsızlık kayıtları silinir\n• Tekrar giriş yapamaz`
     )) return;
     try {
-      // 1. Kara listeye ekle (tekrar kayıt yapmasını engelle)
+      // 1. Silinen kullanıcı kaydı (UID saklanır, tekrar onaylama için gerekli)
       if (u.email) {
         await setDoc(doc(db, "deletedUsers", u.email.toLowerCase()), {
-          email: u.email.toLowerCase(), name: u.name, deletedAt: new Date().toISOString(),
+          email: u.email.toLowerCase(), name: u.name, uid: u.id, deletedAt: new Date().toISOString(),
         });
       }
 
@@ -95,14 +95,28 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
       const secondaryAuth = getAuth(secondaryApp);
 
       let uid;
+      let needsPasswordReset = false;
       try {
         const cred = await createUserWithEmailAndPassword(secondaryAuth, reg.email, reg.password);
         uid = cred.user.uid;
       } catch (e) {
         if (e.code === "auth/email-already-in-use") {
-          // Auth hesabı var ama Firestore profili yok — giriş yaparak UID al
-          const cred = await signInWithEmailAndPassword(secondaryAuth, reg.email, reg.password);
-          uid = cred.user.uid;
+          // Auth hesabı var — önce yeni şifreyle giriş dene
+          try {
+            const cred = await signInWithEmailAndPassword(secondaryAuth, reg.email, reg.password);
+            uid = cred.user.uid;
+          } catch (e2) {
+            // Şifre uyuşmuyor — daha önce silinmiş kullanıcı, eski UID'yi al
+            const deletedSnap = await getDocs(
+              query(collection(db, "deletedUsers"), where("email", "==", reg.email.toLowerCase()))
+            );
+            if (!deletedSnap.empty) {
+              uid = deletedSnap.docs[0].data().uid;
+              needsPasswordReset = true;
+            } else {
+              throw e2;
+            }
+          }
         } else {
           throw e;
         }
@@ -115,6 +129,11 @@ export default function UsersPage({ users, depts, userProfile, currentUser, regi
         managerId: null, createdAt: serverTimestamp(),
       });
       await deleteDoc(doc(db, "registrations", reg.id));
+      // Silinen hesap yeniden onaylandı — eski UID kullanıldı, şifre sıfırlama maili gönder
+      if (needsPasswordReset) {
+        await sendPasswordResetEmail(auth, reg.email);
+        alert(`Hesap onaylandı.\n\n"${reg.email}" adresine şifre sıfırlama bağlantısı gönderildi. Kullanıcı bu bağlantıyla yeni şifresini belirleyip giriş yapabilir.`);
+      }
       setApproveModal(null);
     } catch (e) { setErr("Onaylama hatası: " + firebaseErrTR(e)); }
     setLoading(false);
